@@ -18,15 +18,21 @@ spi_init(uint32_t ctrla, uint32_t baud)
     have_run_init = 1;
 
     // Setup clock
-    enable_pclock(SERCOM4_GCLK_ID_CORE, ID_SERCOM4);
+    // enable_pclock(SERCOM4_GCLK_ID_CORE, ID_SERCOM4);
+    enable_pclock(SERCOM7_GCLK_ID_CORE, ID_SERCOM7);
 
     // Configure MISO, MOSI, SCK pins
-    gpio_peripheral(GPIO('A', 12), 'D', 0);
-    gpio_peripheral(GPIO('B', 10), 'D', 0);
-    gpio_peripheral(GPIO('B', 11), 'D', 0);
+
+    // gpio_peripheral(GPIO('A', 12), 'D', 0);
+    // gpio_peripheral(GPIO('B', 10), 'D', 0);
+    // gpio_peripheral(GPIO('B', 11), 'D', 0);
+    gpio_peripheral(GPIO('C', 14), 'C', 0);
+    gpio_peripheral(GPIO('C', 13), 'C', 0);
+    gpio_peripheral(GPIO('C', 12), 'C', 0);
 
     // Configure spi
-    SercomSpi *ss = &SERCOM4->SPI;
+    // SercomSpi *ss = &SERCOM4->SPI;
+    SercomSpi *ss = &SERCOM7->SPI;
     ss->CTRLA.reg = 0;
     ss->CTRLA.reg = ctrla & ~SERCOM_SPI_CTRLA_ENABLE;
     ss->CTRLB.reg = SERCOM_SPI_CTRLB_RXEN;
@@ -40,12 +46,17 @@ spi_setup(uint32_t bus, uint8_t mode, uint32_t rate)
     if (bus)
         shutdown("Invalid spi bus");
 
+    // uint32_t ctrla = (SERCOM_SPI_CTRLA_MODE(3)
+    //                   | (mode << SERCOM_SPI_CTRLA_CPHA_Pos)
+    //                   | SERCOM_SPI_CTRLA_DIPO(0)
+    //                   | SERCOM_SPI_CTRLA_DOPO(1)
+    //                   | SERCOM_SPI_CTRLA_ENABLE);
     uint32_t ctrla = (SERCOM_SPI_CTRLA_MODE(3)
                       | (mode << SERCOM_SPI_CTRLA_CPHA_Pos)
-                      | SERCOM_SPI_CTRLA_DIPO(0)
-                      | SERCOM_SPI_CTRLA_DOPO(1)
+                      | SERCOM_SPI_CTRLA_DIPO(2)
+                      | SERCOM_SPI_CTRLA_DOPO(0)
                       | SERCOM_SPI_CTRLA_ENABLE);
-    uint32_t baud = get_pclock_frequency(SERCOM4_GCLK_ID_CORE) / (2 * rate) - 1;
+    uint32_t baud = get_pclock_frequency(SERCOM7_GCLK_ID_CORE) / (2 * rate) - 1;
     spi_init(ctrla, baud);
     return (struct spi_config){ .ctrla = ctrla, .baud = baud };
 }
@@ -54,7 +65,8 @@ void
 spi_prepare(struct spi_config config)
 {
     uint32_t ctrla = config.ctrla, baud = config.baud;
-    SercomSpi *ss = &SERCOM4->SPI;
+    // SercomSpi *ss = &SERCOM4->SPI;
+    SercomSpi *ss = &SERCOM7->SPI;
     if (ctrla == ss->CTRLA.reg && baud == ss->BAUD.reg)
         return;
     ss->CTRLA.reg = ctrla & ~SERCOM_SPI_CTRLA_ENABLE;
@@ -67,7 +79,8 @@ void
 spi_transfer(struct spi_config config, uint8_t receive_data
              , uint8_t len, uint8_t *data)
 {
-    SercomSpi *ss = &SERCOM4->SPI;
+    // SercomSpi *ss = &SERCOM4->SPI;
+    SercomSpi *ss = &SERCOM7->SPI;
     if (receive_data) {
         while (len--) {
             ss->DATA.reg = *data;
