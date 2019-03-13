@@ -174,19 +174,49 @@ class MCU_TMC_SPI:
     def __init__(self, config, name_to_reg, fields):
         self.printer = config.get_printer()
         self.mutex = self.printer.get_reactor().mutex()
-        self.spi = bus.MCU_SPI_from_config(config, 3, default_speed=4000000)
+        (self.spi, self.cs_pin) = bus.MCU_SPI_from_config(config, 3,
+            default_speed=4000000, share_type='tmc2130_cs')
+        chain = config.get('spi_chain', None)
+        if chain:
+            chain_pos, chain_len = chain.split("/")
+            chain_pos = int(chain_pos)
+            chain_len = int(chain_len)
+            if chain_pos <= 0 or chain_pos > chain_len:
+                raise config.error("%s: chain position out of range" %
+                    self.name)
+            self.chain_pos = chain_pos - 1
+            self.chain_len = chain_len
+        else:
+            self.chain_pos = 0
+            self.chain_len = 1
+        for (_, t) in self.printer.lookup_objects(module='tmc2130'):
+            t = t.mcu_tmc
+            if t.cs_pin == self.cs_pin:
+                if t.chain_len != self.chain_len:
+                    raise config.error("%s: differing chain lenghts" %
+                        self.name)
+                if t.chain_pos == self.chain_pos:
+                    raise config.error("%s: chain position already "\
+                        "assigned to different driver" % self.name)
         self.name_to_reg = name_to_reg
         self.fields = fields
     def get_fields(self):
         return self.fields
+    def _build_cmd(self, data):
+        return ([0x00] * ((self.chain_len - self.chain_pos - 1) * 5) +
+                data +
+                [0x00] * (self.chain_pos * 5))
     def get_register(self, reg_name):
         reg = self.name_to_reg[reg_name]
+        cmd = self._build_cmd([reg, 0x00, 0x00, 0x00, 0x00])
         with self.mutex:
-            self.spi.spi_send([reg, 0x00, 0x00, 0x00, 0x00])
+            self.spi.spi_send(cmd)
             if self.printer.get_start_args().get('debugoutput') is not None:
                 return 0
-            params = self.spi.spi_transfer([reg, 0x00, 0x00, 0x00, 0x00])
+            params = self.spi.spi_transfer(cmd)
         pr = bytearray(params['response'])
+        pr = pr[(self.chain_len - self.chain_pos - 1) * 5 :
+                (self.chain_len - self.chain_pos) * 5]
         return (pr[1] << 24) | (pr[2] << 16) | (pr[3] << 8) | pr[4]
     def set_register(self, reg_name, val, print_time=None):
         minclock = 0
@@ -196,7 +226,8 @@ class MCU_TMC_SPI:
         data = [(reg | 0x80) & 0xff, (val >> 24) & 0xff, (val >> 16) & 0xff,
                 (val >> 8) & 0xff, val & 0xff]
         with self.mutex:
-            self.spi.spi_send(data, minclock)
+            self.spi.spi_send(self._build_cmd(data), minclock)
+
 
 
 ######################################################################
