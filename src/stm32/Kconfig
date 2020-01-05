@@ -169,5 +169,9 @@ config SERIAL_PORT
     default 3 if STM32_SERIAL_USART3 || STM32_SERIAL_USART3_ALT
     default 2 if STM32_SERIAL_USART2 || STM32_SERIAL_USART2_ALT
     default 1
+config STM32F0_MCO
+    bool "Output system clock to MCO pin"
+    depends on MACH_STM32F0
+    default n
 
 endif

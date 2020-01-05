@@ -23,6 +23,7 @@ extern GPIO_TypeDef * const digital_regs[];
 #define GPIO_OPEN_DRAIN 0x100
 #define GPIO_FUNCTION(fn) (2 | ((fn) << 4))
 #define GPIO_ANALOG 3
+#define GPIO_HIGH_SPEED (3 << 12)
 
 void enable_pclock(uint32_t periph_base);
 int is_enabled_pclock(uint32_t periph_base);
