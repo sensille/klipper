@@ -15,6 +15,23 @@
 
 static struct task_wake fpga_wake;
 
+#include "stm32/internal.h" // gpio_peripheral
+static void inline
+_gpio_out_write(struct gpio_out g, uint32_t val)
+{
+    GPIO_TypeDef *regs = g.regs;
+    if (val)
+        regs->BSRR = g.bit;
+    else
+        regs->BSRR = g.bit << 16;
+}
+
+static uint8_t inline
+_gpio_in_read(struct gpio_in g)
+{
+    GPIO_TypeDef *regs = g.regs;
+    return !!(regs->IDR & g.bit);
+}
 struct fpga_s {
     struct gpio_out clk;
     struct gpio_in miso;
@@ -25,30 +42,28 @@ struct fpga_s {
     struct gpio_in done;
     struct gpio_out di;
     uint8_t         state;
-    uint32_t        cnt;
+    uint32_t        cnt;    /* number of pages sent or end-timer */
 };
 
 #define FS_INIT_FLASH       0
 #define FS_INIT_FPGA        1
-#define FS_TRANSFER         2
-#define FS_SEND_RESPONSE    3
-#define FS_INITIALIZED      4
+#define FS_INIT_WAIT        2
+#define FS_TRANSFER         3
+#define FS_SEND_RESPONSE    4
+#define FS_INITIALIZED      5
 
-static uint32_t
+static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
 {
-    return timer_from_us(ns * 1000) / 1000000;
+    return (((uint64_t)ns * CONFIG_CLOCK_FREQ) / 1000000000ull);
 }
 
 static inline void
 ndelay(uint32_t nsecs)
 {
-    if (CONFIG_CLOCK_FREQ <= 48000000)
-        // Slower MCUs don't require a delay
-        return;
     uint32_t end = timer_read_time() + nsecs_to_ticks(nsecs);
     while (timer_is_before(timer_read_time(), end))
-        irq_poll();
+        ;
 }
 
 void
@@ -79,7 +94,7 @@ DECL_COMMAND(command_config_fpga,
              "config_fpga oid=%c clk_pin=%u miso_pin=%u mosi_pin=%u cs_pin=%u "
              "program_pin=%u init_pin=%u done_pin=%u di_pin=%u");
 
-void
+void noinline
 fpga_task(void)
 {
     if (!sched_check_wake(&fpga_wake))
@@ -115,23 +130,31 @@ fpga_task(void)
                 shutdown("fpga config error (init not low)");
             ndelay(40);
             gpio_out_write(f->program, 1);
-            ndelay(20);
-            // check for initn to go high and done low
-            if (!gpio_in_read(f->init))
-                shutdown("fpga config error (init not high)");
+
+            // check for done low
             if (gpio_in_read(f->done))
                 shutdown("fpga config error (done not low)");
 
-            f->cnt = 0;
-            f->state = FS_TRANSFER;
+            f->cnt = timer_read_time() + nsecs_to_ticks(100000000);
+            f->state = FS_INIT_WAIT;
+        } else if (f->state == FS_INIT_WAIT) {
+            // wait up to 100ms for init to go high
+            if (timer_is_before(f->cnt, timer_read_time()))
+                shutdown("fpga config error (timeout on init)");
+            if (gpio_in_read(f->init)) {
+                f->cnt = 0;
+                f->state = FS_TRANSFER;
+            }
         } else if (f->state == FS_TRANSFER) {
             // transfer 1024 bits from flash to fpga
+            // both flash and fpga can go beyond 30MHz, so we don't insert any
+            // waits here
+            int bit;
             for (i = 0; i < 1024; ++i) {
-                gpio_out_write(f->di, gpio_in_read(f->miso));
-                ndelay(200);
-                gpio_out_write(f->clk, 1);
-                ndelay(200);
-                gpio_out_write(f->clk, 0);
+                _gpio_out_write(f->clk, 1);
+                bit = _gpio_in_read(f->miso);
+                _gpio_out_write(f->clk, 0);
+                _gpio_out_write(f->di, bit);
             }
 
             // check for error
