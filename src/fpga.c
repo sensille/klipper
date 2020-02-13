@@ -4,34 +4,25 @@
 //
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
+#include <string.h> // memcpy
+
 #include "autoconf.h" // CONFIG_CLOCK_FREQ
 #include "board/gpio.h" // gpio_out_write
 #include "basecmd.h" // oid_alloc
 #include "command.h" // DECL_COMMAND
 #include "sched.h" // DECL_SHUTDOWN
-#include "spicmds.h" // spidev_transfer
-#include "board/irq.h" // irq_poll
-#include "board/misc.h" // timer_from_us
+#include "generic/serial_irq.h"
+#include "board/misc.h" // timer_read_time
 
-static struct task_wake fpga_wake;
-
+#if CONFIG_MACH_STM32F0
 #include "stm32/internal.h" // gpio_peripheral
-static void inline
-_gpio_out_write(struct gpio_out g, uint32_t val)
-{
-    GPIO_TypeDef *regs = g.regs;
-    if (val)
-        regs->BSRR = g.bit;
-    else
-        regs->BSRR = g.bit << 16;
-}
+#endif
 
-static uint8_t inline
-_gpio_in_read(struct gpio_in g)
-{
-    GPIO_TypeDef *regs = g.regs;
-    return !!(regs->IDR & g.bit);
-}
+#define F_BUFSZ 128
+#define F_NEXT(p) (((p) + 1) & (F_BUFSZ - 1))
+
+static struct task_wake fpga_config_wake;
+static struct task_wake fpga_serial_wake;
 struct fpga_s {
     struct gpio_out clk;
     struct gpio_in miso;
@@ -43,7 +34,17 @@ struct fpga_s {
     struct gpio_out di;
     uint8_t         state;
     uint32_t        cnt;    /* number of pages sent or end-timer */
+    uint32_t        uart;
+    uint8_t         rx_head;
+    uint8_t         rx_tail;
+    uint8_t         rx_buf[F_BUFSZ];
+    uint8_t         tx_head;
+    uint8_t         tx_tail;
+    uint8_t         tx_buf[F_BUFSZ];
 };
+
+static void fpga_rx_byte(void *, uint_fast8_t);
+static int fpga_get_tx_byte(void *, uint8_t *);
 
 #define FS_INIT_FLASH       0
 #define FS_INIT_FPGA        1
@@ -69,8 +70,7 @@ ndelay(uint32_t nsecs)
 void
 command_config_fpga(uint32_t *args)
 {
-    struct fpga_s *f = oid_alloc(args[0], command_config_fpga,
-                                    sizeof(*f));
+    struct fpga_s *f = oid_alloc(args[0], command_config_fpga, sizeof(*f));
     /* spi to flash */
     f->clk = gpio_out_setup(args[1], 0);
     f->miso = gpio_in_setup(args[2], 0);
@@ -82,24 +82,37 @@ command_config_fpga(uint32_t *args)
     f->done = gpio_in_setup(args[7], 1);
     f->di = gpio_out_setup(args[8], 1);
 
-	output("fpga setup called with oid %u", args[0]);
-
     // wait a 100us before starting
     ndelay(100000);
     f->state = FS_INIT_FLASH;
 
-    sched_wake_task(&fpga_wake);
+    sched_wake_task(&fpga_config_wake);
 }
 DECL_COMMAND(command_config_fpga,
              "config_fpga oid=%c clk_pin=%u miso_pin=%u mosi_pin=%u cs_pin=%u "
              "program_pin=%u init_pin=%u done_pin=%u di_pin=%u");
 
-void noinline
-fpga_task(void)
+void
+command_config_fpga_noinit(uint32_t *args)
 {
-    if (!sched_check_wake(&fpga_wake))
-        return;
+    struct fpga_s *f = oid_alloc(args[0], command_config_fpga,
+                                    sizeof(*f));
+    /* slave serial to fpga */
+    f->program = gpio_out_setup(args[1], 1);
+    f->done = gpio_in_setup(args[2], 1);
 
+    // just check fpga is really in user mode
+    if (!gpio_in_read(f->done))
+        shutdown("fpga not ready (done not set)");
+
+    f->state = FS_INITIALIZED;
+}
+DECL_COMMAND(command_config_fpga_noinit,
+             "config_fpga_noinit oid=%c program_pin=%u done_pin=%u");
+
+void
+fpga_config_task(void)
+{
     uint8_t oid;
     struct fpga_s *f;
     int wake = 0;
@@ -151,10 +164,19 @@ fpga_task(void)
             // waits here
             int bit;
             for (i = 0; i < 1024; ++i) {
+#if CONFIG_MACH_STM32F0
+                // optimized version with inlined gpio functions
+                ((GPIO_TypeDef *)f->clk.regs)->BSRR = f->clk.bit;
+                bit = ((GPIO_TypeDef *)f->miso.regs)->IDR & f->miso.bit;
+                ((GPIO_TypeDef *)f->clk.regs)->BSRR = f->clk.bit << 16;
+                ((GPIO_TypeDef *)f->di.regs)->BSRR =
+                    f->di.bit << (bit ? 0 : 16);
+#else
                 _gpio_out_write(f->clk, 1);
                 bit = _gpio_in_read(f->miso);
                 _gpio_out_write(f->clk, 0);
                 _gpio_out_write(f->di, bit);
+#endif
             }
 
             // check for error
@@ -174,8 +196,72 @@ fpga_task(void)
             wake = 1;
     }
     if (wake)
-        sched_wake_task(&fpga_wake);
+        sched_wake_task(&fpga_config_wake);
 }
+
+void
+command_fpga_set_bus(uint32_t *args)
+{
+    struct fpga_s *f = oid_lookup(args[0], command_config_fpga);
+
+    serial_setup(args[1], args[2], fpga_rx_byte, fpga_get_tx_byte, f);
+
+    f->uart = args[1];
+
+    memcpy(f->tx_buf, "123456789abcdefghijklmnopqrstuvwxyz", 36);
+    f->tx_head = 36;
+    serial_enable_tx(f->uart);
+
+//    TODO: initiate communication
+}
+DECL_COMMAND(command_fpga_set_bus, "fpga_set_bus oid=%c usart_bus=%u rate=%u");
+
+static void
+fpga_rx_byte(void *ctx, uint_fast8_t b)
+{
+    struct fpga_s *f = ctx;
+
+    if (F_NEXT(f->rx_head) == f->rx_tail)
+        shutdown("fpga rx overflow");
+
+    f->rx_buf[f->rx_head] = b;
+    f->rx_head = F_NEXT(f->rx_head);
+
+    sched_wake_task(&fpga_serial_wake);
+}
+
+static int
+fpga_get_tx_byte(void *ctx, uint8_t *b)
+{
+    struct fpga_s *f = ctx;
+
+    *b = 'x';
+    return 0;
+
+    if (f->tx_head == f->tx_tail)
+        return 1;
+
+    *b = f->tx_buf[f->tx_tail];
+    f->tx_tail = F_NEXT(f->tx_tail);
+
+    return 0;
+}
+
+void
+fpga_serial_task(void)
+{
+}
+
+void
+fpga_task(void)
+{
+    if (sched_check_wake(&fpga_config_wake))
+        fpga_config_task();
+
+    if (sched_check_wake(&fpga_serial_wake))
+        fpga_serial_task();
+}
+
 DECL_TASK(fpga_task);
 
 #if 0
