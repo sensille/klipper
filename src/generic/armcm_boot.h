@@ -16,6 +16,12 @@ void armcm_main(void);
         NVIC_EnableIRQ((NUM));                          \
     } while (0)
 
+// run-time enable an already declared IRQ handler
+#define armcm_enable_declared_irq(NUM, PRIORITY) do {      \
+        NVIC_SetPriority((NUM), (PRIORITY));            \
+        NVIC_EnableIRQ((NUM));                          \
+    } while (0)
+
 // Vectors created by scripts/buildcommands.py from DECL_ARMCM_IRQ commands
 extern const void * const VectorTable[];
 
