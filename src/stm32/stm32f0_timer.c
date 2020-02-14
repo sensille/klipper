@@ -6,7 +6,7 @@
 
 #include "board/armcm_boot.h" // armcm_enable_irq
 #include "board/armcm_timer.h" // udelay
-#include "board/internal.h" // TIM3
+#include "board/internal.h" // TIM1/2
 #include "board/io.h" // readl
 #include "board/irq.h" // irq_disable
 #include "board/misc.h" // timer_read_time
@@ -19,14 +19,14 @@
  * Low level timer code
  ****************************************************************/
 
-// Use 32bit TIM2 timer if available (otherwise use 16bit TIM3 timer)
+// Use 32bit TIM2 timer if available (otherwise use 16bit TIM1 timer)
 #ifdef TIM2
 #define TIMx TIM2
 #define TIMx_IRQn TIM2_IRQn
 #define HAVE_TIMER_32BIT 1
 #else
-#define TIMx TIM3
-#define TIMx_IRQn TIM3_IRQn
+#define TIMx TIM1
+#define TIMx_IRQn TIM1_CC_IRQn
 #define HAVE_TIMER_32BIT 0
 #endif
 
