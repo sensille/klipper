@@ -122,3 +122,25 @@ timer_init(void)
     irq_restore(flag);
 }
 DECL_INIT(timer_init);
+
+// Route timer overflow to external pin for syncing
+void
+enable_timesync_out(uint8_t pin)
+{
+    if (pin != GPIO('B', 14))
+        shutdown("invalid timersync pin");
+
+#if TIMx_IRQn != TIM1_CC_IRQn
+    shutdown("timersync only possible with timer 1");
+#endif
+
+    gpio_peripheral(pin, GPIO_FUNCTION(2) | GPIO_HIGH_SPEED, 0);
+#if 0
+    gpio_peripheral(GPIO('A', 9), GPIO_FUNCTION(2) | GPIO_HIGH_SPEED, 0);
+#endif
+
+    TIMx->CCMR1 |= TIM_CCMR1_OC2M_0 | TIM_CCMR1_OC2M_1; // toggle mode
+    TIMx->BDTR = TIM_BDTR_MOE;
+    TIMx->CCER |= TIM_CCER_CC2NE;
+    TIMx->CCER |= TIM_CCER_CC2E;
+}

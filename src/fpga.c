@@ -12,6 +12,7 @@
 #include "command.h" // DECL_COMMAND
 #include "sched.h" // DECL_SHUTDOWN
 #include "generic/serial_irq.h"
+#include "generic/timer_irq.h" // enable_timesync_out
 #include "board/misc.h" // timer_read_time
 
 #if CONFIG_MACH_STM32F0
@@ -200,7 +201,7 @@ fpga_config_task(void)
 }
 
 void
-command_fpga_set_bus(uint32_t *args)
+command_fpga_setup(uint32_t *args)
 {
     struct fpga_s *f = oid_lookup(args[0], command_config_fpga);
 
@@ -208,13 +209,16 @@ command_fpga_set_bus(uint32_t *args)
 
     f->uart = args[1];
 
+    enable_timesync_out(args[3]);
+
     memcpy(f->tx_buf, "123456789abcdefghijklmnopqrstuvwxyz", 36);
     f->tx_head = 36;
     serial_enable_tx(f->uart);
 
 //    TODO: initiate communication
 }
-DECL_COMMAND(command_fpga_set_bus, "fpga_set_bus oid=%c usart_bus=%u rate=%u");
+DECL_COMMAND(command_fpga_setup,
+    "fpga_setup oid=%c usart_bus=%u rate=%u timesync_pin=%u");
 
 static void
 fpga_rx_byte(void *ctx, uint_fast8_t b)
