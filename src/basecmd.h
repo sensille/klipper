@@ -13,6 +13,7 @@ void *oid_alloc(uint8_t oid, void *type, uint16_t size);
 void *oid_next(uint8_t *i, void *type);
 void stats_update(uint32_t start, uint32_t cur);
 void config_reset(uint32_t *args);
+void read_uptime(uint32_t *cur, uint32_t *high);
 
 #define foreach_oid(pos,data,oidtype)                   \
     for (pos=-1; (data=oid_next(&pos, oidtype)); )
