@@ -144,19 +144,22 @@ serial_setup(uint32_t bus, uint32_t rate, void (*rxfunc)(void *, uint_fast8_t),
 
     enable_pclock((uint32_t)usarts[n]);
 
+    // set alternate function first. If we do this after enabling the usart,
+    // the switch may cause us to receive to a stray 0xff
+    gpio_peripheral(usart_bus[bus].rx_pin, GPIO_FUNCTION(usart_bus[bus].af), 1);
+    gpio_peripheral(usart_bus[bus].tx_pin, GPIO_FUNCTION(usart_bus[bus].af), 0);
+
     uint32_t pclk = get_pclock_frequency((uint32_t)usarts[n]);
     uint32_t div = DIV_ROUND_CLOSEST(pclk, rate);
     usarts[n]->BRR = (((div / 16) << USART_BRR_DIV_MANTISSA_Pos)
                     | ((div % 16) << USART_BRR_DIV_FRACTION_Pos));
     usarts[n]->CR1 = CR1_FLAGS;
-    armcm_enable_declared_irq(irqvecs[n], 0);
-
-    gpio_peripheral(usart_bus[bus].rx_pin, GPIO_FUNCTION(usart_bus[bus].af), 1);
-    gpio_peripheral(usart_bus[bus].tx_pin, GPIO_FUNCTION(usart_bus[bus].af), 0);
 
     rxfuncs[n] = rxfunc;
     txfuncs[n] = txfunc;
     ctxs[n] = ctx;
+
+    armcm_enable_declared_irq(irqvecs[n], 0);
 }
 
 // stubs for command callbacks
