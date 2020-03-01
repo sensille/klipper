@@ -257,7 +257,8 @@ command_fpga_setup(uint32_t *args)
 
     f->uart = args[1];
 
-    enable_timesync_out(args[3]);
+    // will force output to 1
+    configure_timesync_out(args[3]);
 
     f->serial_reset = gpio_out_setup(args[4], 0);
     f->serial_error = gpio_in_setup(args[5], 0);
@@ -287,7 +288,31 @@ rsp_get_version(fpga_t *f, uint32_t *args)
     output("FPGA version is %u", args[0]);
 
     f->version = args[0];
-    // do timesync
+
+    // wait for the time to be in the lower half of the 16 bit range
+    // We can do this safely from mainloop, as one round only
+    // takes ~1.4ms at 48MHz
+    while ((timer_read_time() & 0xffff) >= 0x8000)
+        ;
+
+    // will set the timesync out to 0 once on next timer overflow
+    enable_timesync_out();
+
+    // wait to be in the upper half
+    while ((timer_read_time() & 0xffff) < 0x8000)
+        ;
+
+    // ... and back in the lower half.
+    while ((timer_read_time() & 0xffff) >= 0x8000)
+        ;
+
+    // the overflow has occurred. Read the current time, calculate when the
+    // wrap happened and send it to the fpga
+    uint32_t cur, high;
+    read_uptime(&cur, &high);
+    cur &= ~0xffff;
+
+    fpga_send(f, &cmd_sync_time, cur, high);
 }
 
 void
