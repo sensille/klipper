@@ -27,6 +27,7 @@ static struct task_wake fpga_config_wake;
 static struct task_wake fpga_serial_wake;
 typedef struct fpga_s {
     uint8_t         oid;
+    uint8_t         last_oid;   /* cache for responses */
     struct gpio_out clk;
     struct gpio_in miso;
     struct gpio_out mosi;
@@ -103,8 +104,10 @@ struct command_encoder cmd_schedule_pwm = { CMD_SCHEDULE_PWM, 21, 3, NULL };
 #define CMD_ENDSTOP_SET_STEPPER 10
 #define CMD_ENDSTOP_QUERY       11
 #define CMD_ENDSTOP_HOME        12
-#define CMD_TMCUART_WRITE       13
-#define CMD_TMCUART_READ        14
+#endif
+struct command_encoder cmd_tmcuart_write = { CMD_TMCUART_WRITE, 26, 4, NULL };
+struct command_encoder cmd_tmcuart_read = { CMD_TMCUART_READ, 21, 3, NULL };
+#if 0
 #define CMD_SET_DIGITAL_OUT     15
 #define CMD_CONFIG_DIGITAL_OUT  16
 #define CMD_SCHEDULE_DIGITAL_OUT 17
@@ -371,12 +374,66 @@ command_fpga_schedule_pwm(uint32_t *args)
 DECL_COMMAND(command_fpga_schedule_pwm, "fpga_schedule_pwm oid=%c clock=%u "
     "on-ticks=%u");
 
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+    uint8_t slave;
+} fpga_tmcuart_t;
+
+void
+command_fpga_config_tmcuart(uint32_t *args)
+{
+    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_tmcuart_t *t = oid_alloc(args[0], command_fpga_config_tmcuart,
+        sizeof(*t));
+
+    t->fpga = f;
+    t->channel = args[2];
+    t->slave = args[3];
+}
+DECL_COMMAND(command_fpga_config_tmcuart, "fpga_config_tmcuart oid=%c "
+    "fpga_oid=%c channel=%c slave=%c");
+
+void
+command_fpga_tmcuart_read(uint32_t *args)
+{
+    fpga_tmcuart_t *t = oid_lookup(args[0], command_fpga_config_tmcuart);
+
+    t->fpga->last_oid = args[0];
+
+    fpga_send(t->fpga, &cmd_tmcuart_read, t->channel, t->slave, args[1]);
+}
+DECL_COMMAND(command_fpga_tmcuart_read, "fpga_tmcuart_read oid=%c register=%c");
+
+static void
+rsp_tmcuart_read(fpga_t *f, uint32_t *args)
+{
+    sendf("fpga_tmcuart_data oid=%c status=%c data=%u", f->last_oid,
+        args[0], args[1]);
+}
+
+void
+command_fpga_tmcuart_write(uint32_t *args)
+{
+    fpga_tmcuart_t *t = oid_lookup(args[0], command_fpga_config_tmcuart);
+
+    t->fpga->last_oid = args[0];
+
+    fpga_send(t->fpga, &cmd_tmcuart_write, t->channel, t->slave, args[1],
+        args[2]);
+}
+DECL_COMMAND(command_fpga_tmcuart_write,
+    "fpga_tmcuart_write oid=%c register=%c data=%u");
+
 struct response_handler_s {
     uint8_t nargs;
     void (*func)(fpga_t *, uint32_t *);
 } response_handlers[] = {
     { 1, rsp_get_version },
     { 2, rsp_get_uptime },
+    { 2, rsp_get_uptime }, /* stepper_get_pos */
+    { 2, rsp_get_uptime }, /* endstop_state */
+    { 2, rsp_tmcuart_read },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))

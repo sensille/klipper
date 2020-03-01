@@ -10,8 +10,8 @@ CMD_CONFIG_PWM:     3 <channel> <cycle-ticks> <value (0-cycle-ticks) >
                       <default (0/1)> <max_duration>
   -- fpga_config_pwm(oid, oid_fpga, channel, cycle-ticks, value, default,
                       max_duration)
-CMD_SCHEDULE_PWM:   4 <channel> <new duty>
-    where duty = number of ticks signal is low (not high)
+CMD_SCHEDULE_PWM:   4 <channel> <clock> <on-ticks>
+    where on-ticks = number of ticks signal is low (not high)
 
 cmdtab[CMD_CONFIG_STEPPER] = { UNIT_STEPPER, ARGS_, 1'b0, 1'b0 };
 in: <channel> <min_stop_interval>
@@ -42,4 +42,11 @@ out: <homing> <pin_value>
 
         cmdtab[CMD_ENDSTOP_HOME] = { UNIT_STEPPER, ARGS_, 1'b0, 1'b0 };
 in: <endstop-channel> <time> <sample_count> <pin_value>
+
+        CMD_TMCUART_WRITE in <channel> <slave> <register> <data>
+        CMD_TMCUART_READ in <channel> <slave> <register>
+        cmdtab[CMD_SET_DIGITAL_OUT] = { UNIT_GPIO, ARGS_2, 1'b0, 1'b0 };
+        cmdtab[CMD_CONFIG_DIGITAL_OUT] = { UNIT_GPIO, ARGS_4, 1'b0, 1'b0 };
+        cmdtab[CMD_SCHEDULE_DIGITAL_OUT] = { UNIT_GPIO, ARGS_3, 1'b0, 1'b0 };
+        cmdtab[CMD_UPDATE_DIGITAL_OUT] = { UNIT_GPIO, ARGS_2, 1'b0, 1'b0 };
 
