@@ -16,6 +16,7 @@ void timer_kick(void);
 void *dynmem_start(void);
 void *dynmem_end(void);
 
+uint16_t crc16_ccitt_one(uint8_t byte, uint16_t crc);
 uint16_t crc16_ccitt(uint8_t *buf, uint_fast8_t len);
 
 #endif // misc.h
