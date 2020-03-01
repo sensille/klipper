@@ -248,10 +248,17 @@ DECL_COMMAND_FLAGS(command_get_clock, HF_IN_SHUTDOWN, "get_clock");
 static uint32_t stats_send_time, stats_send_time_high;
 
 void
+read_uptime(uint32_t *cur, uint32_t *high)
+{
+    *cur = timer_read_time();
+    *high = stats_send_time_high + (*cur < stats_send_time);
+}
+
+void
 command_get_uptime(uint32_t *args)
 {
-    uint32_t cur = timer_read_time();
-    uint32_t high = stats_send_time_high + (cur < stats_send_time);
+    uint32_t cur, high;
+    read_uptime(&cur, &high);
     sendf("uptime high=%u clock=%u", high, cur);
 }
 DECL_COMMAND_FLAGS(command_get_uptime, HF_IN_SHUTDOWN, "get_uptime");
