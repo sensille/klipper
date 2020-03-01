@@ -88,16 +88,28 @@ static void fpga_send(fpga_t *f, struct command_encoder *ce, ...);
 #define RSP_ENDSTOP_STATE       3
 #define RSP_TMCUART_READ        4
 
-uint8_t pt_1_args[] = { PT_uint32 };
-uint8_t pt_2_args[] = { PT_uint32, PT_uint32 };
-uint8_t pt_3_args[] = { PT_uint32, PT_uint32, PT_uint32 };
-uint8_t pt_4_args[] = { PT_uint32, PT_uint32, PT_uint32, PT_uint32 };
-uint8_t pt_5_args[] = { PT_uint32, PT_uint32, PT_uint32, PT_uint32, PT_uint32 };
-
 // size (2nd parameter): 6 + 5 * num_params
 struct command_encoder cmd_get_version = { CMD_GET_VERSION, 6, 0, NULL };
-struct command_encoder cmd_sync_time = { CMD_SYNC_TIME, 10, 2, pt_2_args };
+struct command_encoder cmd_sync_time = { CMD_SYNC_TIME, 10, 2, NULL };
 struct command_encoder cmd_get_uptime = { CMD_GET_TIME, 6, 0, NULL };
+struct command_encoder cmd_config_pwm = { CMD_CONFIG_PWM, 31, 5, NULL };
+struct command_encoder cmd_schedule_pwm = { CMD_SCHEDULE_PWM, 21, 3, NULL };
+#if 0
+#define CMD_CONFIG_STEPPER      5
+#define CMD_QUEUE_STEP          6
+#define CMD_SET_NEXT_STEP_DIR   7
+#define CMD_RESET_STEP_CLOCK    8
+#define CMD_STEPPER_GET_POS     9
+#define CMD_ENDSTOP_SET_STEPPER 10
+#define CMD_ENDSTOP_QUERY       11
+#define CMD_ENDSTOP_HOME        12
+#define CMD_TMCUART_WRITE       13
+#define CMD_TMCUART_READ        14
+#define CMD_SET_DIGITAL_OUT     15
+#define CMD_CONFIG_DIGITAL_OUT  16
+#define CMD_SCHEDULE_DIGITAL_OUT 17
+#define CMD_UPDATE_DIGITAL_OUT  18
+#endif
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -329,6 +341,35 @@ rsp_get_uptime(fpga_t *f, uint32_t *args)
 {
     sendf("fpga_uptime oid=%c high=%u clock=%u", f->oid, args[1], args[0]);
 }
+
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+} fpga_pwm_t;
+
+void
+command_fpga_config_pwm(uint32_t *args)
+{
+    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_pwm_t *p = oid_alloc(args[0], command_fpga_config_pwm, sizeof(*p));
+
+    p->fpga = f;
+    p->channel = args[2];
+
+    fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4], args[5], args[6]);
+}
+DECL_COMMAND(command_fpga_config_pwm, "fpga_config_pwm oid=%c fpga_oid=%c "
+    "channel=%c cycle-ticks=%u on-ticks=%u default=%c max_duration=%u");
+
+void
+command_fpga_schedule_pwm(uint32_t *args)
+{
+    fpga_pwm_t *p = oid_lookup(args[0], command_fpga_config_pwm);
+
+    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], args[2]);
+}
+DECL_COMMAND(command_fpga_schedule_pwm, "fpga_schedule_pwm oid=%c clock=%u "
+    "on-ticks=%u");
 
 struct response_handler_s {
     uint8_t nargs;

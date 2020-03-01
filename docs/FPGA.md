@@ -1,24 +1,19 @@
-        cmdtab[CMD_GET_VERSION] = { UNIT_SYSTEM, ARGS_0, 1'b0, 1'b1 };
-in: nothing
+CMD_GET_VERSION:    0 <>
+  -- issued with fpga_setup
+RSP_GET_VERSION:    0 <version>
+CMD_SYNC_TIME:      1 <ref-time low> <ref-time high>
+  -- issued with fpga_setup
+CMD_GET_TIME:       2 <>
+  -- fpga_get_time(oid)
+RSP_GET_TIME:       1 <time low> <time high>
+CMD_CONFIG_PWM:     3 <channel> <cycle-ticks> <value (0-cycle-ticks) >
+                      <default (0/1)> <max_duration>
+  -- fpga_config_pwm(oid, oid_fpga, channel, cycle-ticks, value, default,
+                      max_duration)
+CMD_SCHEDULE_PWM:   4 <channel> <new duty>
+    where duty = number of ticks signal is low (not high)
 
-RSP_GET_VERSION
-out: version
-
-        cmdtab[CMD_SYNC_TIME] = { UNIT_SYSTEM, ARGS_2, 1'b0, 1'b0 };
-in: <ref-time low> <ref-time high>
-        cmdtab[CMD_GET_TIME] = { UNIT_SYSTEM, ARGS_0, 1'b0, 1'b1 };
-in: nothing
-RSP_GET_TIME
-out: <time low> <time high>
-
-        cmdtab[CMD_CONFIG_PWM] = { UNIT_PWM, ARGS_5, 1'b0, 1'b0 };
-in: <channel> <cycle-ticks> <value (0-cycle-ticks) > <default (0/1)> <max_duration>
-
-        cmdtab[CMD_SCHEDULE_PWM] = { UNIT_PWM, ARGS_3, 1'b0, 1'b0 };
-in: <channel> <new duty>
-where duty = number of ticks signal is low (not high)
-
-        cmdtab[CMD_CONFIG_STEPPER] = { UNIT_STEPPER, ARGS_, 1'b0, 1'b0 };
+cmdtab[CMD_CONFIG_STEPPER] = { UNIT_STEPPER, ARGS_, 1'b0, 1'b0 };
 in: <channel> <min_stop_interval>
 always uses dedge
 
