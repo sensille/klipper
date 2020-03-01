@@ -26,6 +26,7 @@
 static struct task_wake fpga_config_wake;
 static struct task_wake fpga_serial_wake;
 typedef struct fpga_s {
+    uint8_t         oid;
     struct gpio_out clk;
     struct gpio_in miso;
     struct gpio_out mosi;
@@ -37,8 +38,9 @@ typedef struct fpga_s {
     struct gpio_out serial_reset;
     struct gpio_in serial_error;
     uint8_t         state;
-    uint32_t        cnt;    /* number of pages sent or end-timer */
+    uint32_t        cnt;       // number of pages sent or end-timer
     uint32_t        uart;
+    uint32_t        version;   // FPGA version identifier
     uint8_t         rx_head;
     uint8_t         rx_tail;
     uint8_t         rx_buf[F_BUFSZ];
@@ -95,7 +97,7 @@ uint8_t pt_5_args[] = { PT_uint32, PT_uint32, PT_uint32, PT_uint32, PT_uint32 };
 // size (2nd parameter): 6 + 5 * num_params
 struct command_encoder cmd_get_version = { CMD_GET_VERSION, 6, 0, NULL };
 struct command_encoder cmd_sync_time = { CMD_SYNC_TIME, 10, 2, pt_2_args };
-struct command_encoder cmd_get_time = { CMD_GET_TIME, 6, 0, NULL };
+struct command_encoder cmd_get_uptime = { CMD_GET_TIME, 6, 0, NULL };
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -115,6 +117,7 @@ void
 command_config_fpga(uint32_t *args)
 {
     fpga_t *f = oid_alloc(args[0], command_config_fpga, sizeof(*f));
+    f->oid = args[0];
     /* spi to flash */
     f->clk = gpio_out_setup(args[1], 0);
     f->miso = gpio_in_setup(args[2], 0);
@@ -140,6 +143,7 @@ void
 command_config_fpga_noinit(uint32_t *args)
 {
     fpga_t *f = oid_alloc(args[0], command_config_fpga, sizeof(*f));
+    f->oid = args[0];
     /* slave serial to fpga */
     f->program = gpio_out_setup(args[1], 1);
     f->done = gpio_in_setup(args[2], 1);
@@ -268,12 +272,10 @@ command_fpga_setup(uint32_t *args)
     if (gpio_in_read(f->serial_error))
         shutdown("communication to fpga still in error state");
 
-#if 1
     // read version
     fpga_send(f, &cmd_get_version);
-#endif
 
-    // do timesync
+    // processing continues in the callback for get_version
 }
 DECL_COMMAND(command_fpga_setup,
     "fpga_setup oid=%c usart_bus=%u rate=%u timesync_pin=%u "
@@ -282,7 +284,25 @@ DECL_COMMAND(command_fpga_setup,
 static void
 rsp_get_version(fpga_t *f, uint32_t *args)
 {
-    output("received version %u", args[0]);
+    output("FPGA version is %u", args[0]);
+
+    f->version = args[0];
+    // do timesync
+}
+
+void
+command_fpga_get_uptime(uint32_t *args)
+{
+    fpga_t *f = oid_lookup(args[0], command_config_fpga);
+
+    fpga_send(f, &cmd_get_uptime);
+}
+DECL_COMMAND(command_fpga_get_uptime, "fpga_get_uptime oid=%c");
+
+static void
+rsp_get_uptime(fpga_t *f, uint32_t *args)
+{
+    sendf("fpga_uptime oid=%c high=%u clock=%u", f->oid, args[1], args[0]);
 }
 
 struct response_handler_s {
@@ -290,9 +310,7 @@ struct response_handler_s {
     void (*func)(fpga_t *, uint32_t *);
 } response_handlers[] = {
     { 1, rsp_get_version },
-#if 0
-    { 2, rsp_get_time },
-#endif
+    { 2, rsp_get_uptime },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))
