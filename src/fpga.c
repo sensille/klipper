@@ -501,16 +501,15 @@ typedef struct {
 void
 command_fpga_config_endstop(uint32_t *args)
 {
-    fpga_stepper_t *s = oid_lookup(args[1], command_fpga_config_stepper);
-    fpga_endstop_t *e = oid_alloc(args[0], command_fpga_config_stepper,
-        sizeof(*s));
+    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_endstop_t *e = oid_alloc(args[0], command_fpga_config_endstop,
+        sizeof(*e));
 
-    e->fpga = s->fpga;
-    e->stepper = s;
+    e->fpga = f;
     e->channel = args[2];
 }
 DECL_COMMAND(command_fpga_config_endstop,
-    "fpga_config_endstop oid=%c stepper_oid=%c channel=%c");
+    "fpga_config_endstop oid=%c fpga_oid=%c channel=%c");
 
 void
 command_fpga_endstop_set_stepper(uint32_t *args)
