@@ -156,7 +156,6 @@ class MessageFormat:
             t.encode(out, params[name])
         return out
     def parse(self, s, pos):
-        pos += 1
         out = {}
         for name, t in self.param_names:
             v, pos = t.parse(s, pos)
@@ -193,7 +192,6 @@ class OutputFormat:
                     raise error("Invalid output format for '%s'" % (msgformat,))
             args = args[pos+1:]
     def parse(self, s, pos):
-        pos += 1
         out = []
         for t in self.param_types:
             v, pos = t.parse(s, pos)
@@ -251,7 +249,7 @@ class MessageParser:
         out = ["seq: %02x" % (msgseq,)]
         pos = MESSAGE_HEADER_SIZE
         while 1:
-            msgid = s[pos]
+            msgid, pos = PT_uint32().parse(s, pos)
             mid = self.messages_by_id.get(msgid, self.unknown)
             params, pos = mid.parse(s, pos)
             out.append(mid.format_params(params))
@@ -268,9 +266,9 @@ class MessageParser:
             return "%s %s" % (name, msg)
         return str(params)
     def parse(self, s):
-        msgid = s[MESSAGE_HEADER_SIZE]
+        msgid, pos = PT_uint32().parse(s, MESSAGE_HEADER_SIZE)
         mid = self.messages_by_id.get(msgid, self.unknown)
-        params, pos = mid.parse(s, MESSAGE_HEADER_SIZE)
+        params, pos = mid.parse(s, pos)
         if pos != len(s)-MESSAGE_TRAILER_SIZE:
             raise error("Extra data at end of message")
         params['#name'] = mid.name

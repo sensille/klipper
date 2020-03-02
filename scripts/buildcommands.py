@@ -286,9 +286,6 @@ class HandleCommandGeneration:
             if msg not in self.msg_to_id:
                 msgid += 1
                 self.msg_to_id[msg] = msgid
-        if msgid >= 96:
-            # The mcu currently assumes all message ids encode to one byte
-            error("Too many message ids")
     def update_data_dictionary(self, data):
         command_ids = [self.msg_to_id[msg]
                        for msgname, msg in self.messages_by_name.items()
@@ -329,7 +326,7 @@ class HandleCommandGeneration:
             out += "    .num_args=%d," % (num_args,)
         else:
             max_size = min(msgproto.MESSAGE_MAX,
-                           (msgproto.MESSAGE_MIN + 1
+                           (msgproto.MESSAGE_MIN + 2
                             + sum([t.max_length for t in parser.param_types])))
             out += "    .max_size=%d," % (max_size,)
         return out
