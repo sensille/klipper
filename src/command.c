@@ -119,7 +119,7 @@ command_encodef(uint8_t *buf, const struct command_encoder *ce, va_list args)
     uint8_t *maxend = &p[max_size - MESSAGE_MIN];
     uint_fast8_t num_params = READP(ce->num_params);
     const uint8_t *param_types = READP(ce->param_types);
-    *p++ = READP(ce->msg_id);
+    p = encode_int(p, ce->msg_id);
     while (num_params--) {
         if (p > maxend)
             goto error;
@@ -309,7 +309,7 @@ command_dispatch(uint8_t *buf, uint_fast8_t msglen)
     uint8_t *p = &buf[MESSAGE_HEADER_SIZE];
     uint8_t *msgend = &buf[msglen-MESSAGE_TRAILER_SIZE];
     while (p < msgend) {
-        uint_fast8_t cmdid = *p++;
+        uint_fast8_t cmdid = parse_int(&p);
         const struct command_parser *cp = command_lookup_parser(cmdid);
         uint32_t args[READP(cp->num_args)];
         p = command_parsef(p, msgend, cp, args);
