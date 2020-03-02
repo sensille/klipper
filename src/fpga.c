@@ -52,9 +52,14 @@ typedef struct fpga_s {
     uint8_t         tx_seq;
 } fpga_t;
 
+typedef struct {
+    uint8_t     msg_id;
+    uint8_t     nparams;
+} fpga_cmd_t;
+
 static void fpga_rx_byte(void *, uint_fast8_t);
 static int fpga_get_tx_byte(void *, uint8_t *);
-static void fpga_send(fpga_t *f, struct command_encoder *ce, ...);
+static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 
 #define FS_INIT_FLASH       0
 #define FS_INIT_FPGA        1
@@ -89,30 +94,25 @@ static void fpga_send(fpga_t *f, struct command_encoder *ce, ...);
 #define RSP_ENDSTOP_STATE       3
 #define RSP_TMCUART_READ        4
 
-// size (2nd parameter): 6 + 5 * num_params
-struct command_encoder cmd_get_version = { CMD_GET_VERSION, 6, 0, NULL };
-struct command_encoder cmd_sync_time = { CMD_SYNC_TIME, 10, 2, NULL };
-struct command_encoder cmd_get_uptime = { CMD_GET_TIME, 6, 0, NULL };
-struct command_encoder cmd_config_pwm = { CMD_CONFIG_PWM, 31, 5, NULL };
-struct command_encoder cmd_schedule_pwm = { CMD_SCHEDULE_PWM, 21, 3, NULL };
-#if 0
-#define CMD_CONFIG_STEPPER      5
-#define CMD_QUEUE_STEP          6
-#define CMD_SET_NEXT_STEP_DIR   7
-#define CMD_RESET_STEP_CLOCK    8
-#define CMD_STEPPER_GET_POS     9
-#define CMD_ENDSTOP_SET_STEPPER 10
-#define CMD_ENDSTOP_QUERY       11
-#define CMD_ENDSTOP_HOME        12
-#endif
-struct command_encoder cmd_tmcuart_write = { CMD_TMCUART_WRITE, 26, 4, NULL };
-struct command_encoder cmd_tmcuart_read = { CMD_TMCUART_READ, 21, 3, NULL };
-#if 0
-#define CMD_SET_DIGITAL_OUT     15
-#define CMD_CONFIG_DIGITAL_OUT  16
-#define CMD_SCHEDULE_DIGITAL_OUT 17
-#define CMD_UPDATE_DIGITAL_OUT  18
-#endif
+fpga_cmd_t cmd_get_version = { CMD_GET_VERSION, 0 };
+fpga_cmd_t cmd_sync_time = { CMD_SYNC_TIME, 2 };
+fpga_cmd_t cmd_get_uptime = { CMD_GET_TIME, 0 };
+fpga_cmd_t cmd_config_pwm = { CMD_CONFIG_PWM, 5 };
+fpga_cmd_t cmd_schedule_pwm = { CMD_SCHEDULE_PWM, 3 };
+fpga_cmd_t cmd_config_stepper = { CMD_CONFIG_STEPPER, 2 };
+fpga_cmd_t cmd_queue_step = { CMD_QUEUE_STEP, 4 };
+fpga_cmd_t cmd_set_next_step_dir = { CMD_SET_NEXT_STEP_DIR, 2 };
+fpga_cmd_t cmd_reset_step_clock = { CMD_RESET_STEP_CLOCK, 2 };
+fpga_cmd_t cmd_stepper_get_pos = { CMD_STEPPER_GET_POS, 1 };
+fpga_cmd_t cmd_endstop_set_stepper = { CMD_ENDSTOP_SET_STEPPER, 2 };
+fpga_cmd_t cmd_endstop_query = { CMD_ENDSTOP_QUERY, 1 };
+fpga_cmd_t cmd_endstop_home = { CMD_ENDSTOP_HOME, 4 };
+fpga_cmd_t cmd_tmcuart_write = { CMD_TMCUART_WRITE, 4 };
+fpga_cmd_t cmd_tmcuart_read = { CMD_TMCUART_READ, 3 };
+fpga_cmd_t cmd_set_digital_out = { CMD_SET_DIGITAL_OUT, 2 };
+fpga_cmd_t cmd_config_digital_out = { CMD_CONFIG_DIGITAL_OUT, 4 };
+fpga_cmd_t cmd_schedule_digital_out = { CMD_SCHEDULE_DIGITAL_OUT, 3 };
+fpga_cmd_t cmd_update_digital_out = { CMD_UPDATE_DIGITAL_OUT, 2 };
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -417,13 +417,192 @@ command_fpga_tmcuart_write(uint32_t *args)
 {
     fpga_tmcuart_t *t = oid_lookup(args[0], command_fpga_config_tmcuart);
 
-    t->fpga->last_oid = args[0];
-
     fpga_send(t->fpga, &cmd_tmcuart_write, t->channel, t->slave, args[1],
         args[2]);
 }
 DECL_COMMAND(command_fpga_tmcuart_write,
     "fpga_tmcuart_write oid=%c register=%c data=%u");
+
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+} fpga_stepper_t;
+
+void
+command_fpga_config_stepper(uint32_t *args)
+{
+    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_stepper_t *s = oid_alloc(args[0], command_fpga_config_stepper,
+        sizeof(*s));
+
+    s->fpga = f;
+    s->channel = args[2];
+
+    fpga_send(f, &cmd_config_stepper, args[2], args[3]);
+}
+DECL_COMMAND(command_fpga_config_stepper,
+    "fpga_config_stepper oid=%c fpga_oid=%c channel=%c dedge=%c");
+
+void
+command_fpga_queue_step(uint32_t *args)
+{
+    fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
+
+    fpga_send(s->fpga, &cmd_queue_step, s->channel, args[1], args[2], args[3]);
+}
+DECL_COMMAND(command_fpga_queue_step,
+    "fpga_queue_step oid=%c interval=%u count=%u add=%u");
+
+void
+command_fpga_set_next_step_dir(uint32_t *args)
+{
+    fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
+
+    fpga_send(s->fpga, &cmd_set_next_step_dir, s->channel, args[1]);
+}
+DECL_COMMAND(command_fpga_set_next_step_dir,
+    "fpga_set_next_step_dir oid=%c interval=%u count=%u add=%u");
+
+void
+command_fpga_reset_step_clock(uint32_t *args)
+{
+    fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
+
+    // Actual stepping starts 2 cycles after the given time
+    fpga_send(s->fpga, &cmd_reset_step_clock, s->channel, args[1] - 2);
+}
+DECL_COMMAND(command_fpga_reset_step_clock,
+    "fpga_reset_step_clock oid=%c clock=%u");
+
+void
+command_fpga_stepper_get_pos(uint32_t *args)
+{
+    fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
+
+    s->fpga->last_oid = args[0];
+
+    fpga_send(s->fpga, &cmd_stepper_get_pos, s->channel);
+}
+DECL_COMMAND(command_fpga_stepper_get_pos,
+    "fpga_stepper_get_pos oid=%c");
+
+static void
+rsp_stepper_get_pos(fpga_t *f, uint32_t *args)
+{
+    sendf("fpga_stepper_pos oid=%c position=%u", f->last_oid, args[0]);
+}
+
+typedef struct {
+    fpga_t          *fpga;
+    fpga_stepper_t  *stepper;
+    uint8_t         channel;
+} fpga_endstop_t;
+
+void
+command_fpga_config_endstop(uint32_t *args)
+{
+    fpga_stepper_t *s = oid_lookup(args[1], command_fpga_config_stepper);
+    fpga_endstop_t *e = oid_alloc(args[0], command_fpga_config_stepper,
+        sizeof(*s));
+
+    e->fpga = s->fpga;
+    e->stepper = s;
+    e->channel = args[2];
+}
+DECL_COMMAND(command_fpga_config_endstop,
+    "fpga_config_endstop oid=%c stepper_oid=%c channel=%c");
+
+void
+command_fpga_endstop_set_stepper(uint32_t *args)
+{
+    fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
+    fpga_stepper_t *s = oid_lookup(args[1], command_fpga_config_stepper);
+
+    fpga_send(e->fpga, &cmd_endstop_set_stepper, e->channel, s->channel);
+}
+DECL_COMMAND(command_fpga_endstop_set_stepper,
+    "fpga_endstop_set_stepper oid=%c stepper_oid=%c");
+
+void
+command_fpga_endstop_query(uint32_t *args)
+{
+    fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
+
+    e->fpga->last_oid = args[0];
+
+    fpga_send(e->fpga, &cmd_endstop_query, e->channel);
+}
+DECL_COMMAND(command_fpga_endstop_query, "fpga_endstop_query oid=%c");
+
+static void
+rsp_endstop_state(fpga_t *f, uint32_t *args)
+{
+    sendf("fpga_endstop_state oid=%c homing=%c pin_value=%c", f->last_oid,
+        args[0], args[1]);
+}
+
+void
+command_fpga_endstop_home(uint32_t *args)
+{
+    fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
+
+    fpga_send(e->fpga, &cmd_endstop_home, e->channel, args[1], args[2],
+        args[3]);
+}
+DECL_COMMAND(command_fpga_endstop_home,
+    "fpga_endstop_home oid=%c clock=%u sample_count=%c pin_value=%c");
+
+void
+command_fpga_set_digital_out(uint32_t *args)
+{
+    fpga_t *f = oid_lookup(args[0], command_config_fpga);
+
+    fpga_send(f, &cmd_set_digital_out, args[0], args[1]);
+}
+DECL_COMMAND(command_fpga_set_digital_out,
+    "fpga_set_digital_out oid=%c channel=%c pin_value=%c");
+
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+} fpga_digital_out_t;
+void
+command_fpga_config_digital_out(uint32_t *args)
+{
+    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_digital_out_t *d = oid_alloc(args[0], command_fpga_config_digital_out,
+        sizeof(*d));
+
+    d->fpga = f;
+    d->channel = args[2];
+
+    fpga_send(f, &cmd_config_digital_out, args[2], args[3], args[4], args[5]);
+}
+DECL_COMMAND(command_fpga_config_digital_out,
+    "fpga_config_digital_out oid=%c channel=%c value=%c default_value=%c "
+    "max_duration=%u");
+
+void
+command_fpga_schedule_digital_out(uint32_t *args)
+{
+    fpga_digital_out_t *d = oid_lookup(args[0],
+                                       command_fpga_config_digital_out);
+
+    fpga_send(d->fpga, &cmd_schedule_digital_out, d->channel, args[1], args[2]);
+}
+DECL_COMMAND(command_fpga_schedule_digital_out,
+    "fpga_schedule_digital_out oid=%c clock=%u value=%c");
+
+void
+command_fpga_update_digital_out(uint32_t *args)
+{
+    fpga_digital_out_t *d = oid_lookup(args[0],
+                                       command_fpga_config_digital_out);
+
+    fpga_send(d->fpga, &cmd_update_digital_out, d->channel, args[1]);
+}
+DECL_COMMAND(command_fpga_update_digital_out,
+    "fpga_update_digital_out oid=%c value=%c");
 
 struct response_handler_s {
     uint8_t nargs;
@@ -431,8 +610,8 @@ struct response_handler_s {
 } response_handlers[] = {
     { 1, rsp_get_version },
     { 2, rsp_get_uptime },
-    { 2, rsp_get_uptime }, /* stepper_get_pos */
-    { 2, rsp_get_uptime }, /* endstop_state */
+    { 1, rsp_stepper_get_pos },
+    { 2, rsp_endstop_state },
     { 2, rsp_tmcuart_read },
 };
 #define RSP_MAX_ID \
@@ -491,10 +670,10 @@ f4: f_writebuf(f, (*p)++, v & 0x7f);
 // Encode a message and send it to the fpga
 // messages are only sent and received from main loop, so no sync needed
 static void
-fpga_send(fpga_t *f, struct command_encoder *ce, ...)
+fpga_send(fpga_t *f, fpga_cmd_t *fc, ...)
 {
     va_list args;
-    va_start(args, ce);
+    va_start(args, fc);
     uint8_t left;
     uint8_t ptr;
     uint16_t crc = 0xffff;
@@ -505,12 +684,12 @@ fpga_send(fpga_t *f, struct command_encoder *ce, ...)
     else
         left = f->tx_tail - f->tx_head + F_BUFSZ;
 
-    if (ce->max_size > left)
+    if (fc->nparams * 5 + 6 > left)
         shutdown("fpga send buffer overrun");
 
     ptr = 2;
-    f_encodeint(f, ce->msg_id, &ptr);
-    for (i = 0; i < ce->num_params; ++i)
+    f_encodeint(f, fc->msg_id, &ptr);
+    for (i = 0; i < fc->nparams; ++i)
         f_encodeint(f, va_arg(args, uint32_t), &ptr);
     va_end(args);
 
