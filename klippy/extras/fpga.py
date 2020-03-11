@@ -24,10 +24,25 @@ class FPGA:
         printer.register_event_handler("klippy:shutdown", self._shutdown)
         printer.register_event_handler("klippy:disconnect", self._disconnect)
         mcu_name = config.get('mcu', 'mcu')
+        self._flash_clk = config.get('flash_clk')
+        self._flash_miso = config.get('flash_miso')
+        self._flash_mosi = config.get('flash_mosi')
+        self._flash_cs = config.get('flash_cs')
+        self._program = config.get('program')
+        self._init = config.get('init')
+        self._done = config.get('done')
+        self._di = config.get('di')
+        self._usart_bus = config.get('usart')
+        self._usart_rate = config.getint('baud')
+        self._timesync = config.get('timesync')
+        self._serr = config.get('serr')
+        self._sreset = config.get('sreset')
         self._mcu = printer.lookup_object(mcu_name)
+        self._fid = self._mcu.create_fid()
         self._emergency_stop_cmd = None
         # Config building
         printer.lookup_object('pins').register_chip(self._name, self)
+        print("##### register chip %s" % (self._name))
         self._oid_count = 0
         self._config_callbacks = []
         self._init_cmds = []
@@ -40,8 +55,7 @@ class FPGA:
             'max_stepper_error', 0.000025, minval=0.)
         self._stepqueues = []
         self._steppersync = None
-        self._fid = self._mcu.create_fid()
-        printer.add_object('mcu', self)
+        printer.add_object('mcu ' + self._name, self)
     # Serial callbacks
     # Connection phase
     def _check_restart(self, reason):
@@ -53,20 +67,10 @@ class FPGA:
         self._printer.request_exit('firmware_restart')
         self._reactor.pause(self._reactor.monotonic() + 2.000)
         raise error("Attempt FPGA '%s' restart failed" % (self._name,))
-    def _add_custom(self):
-        for line in self._custom.split('\n'):
-            line = line.strip()
-            cpos = line.find('#')
-            if cpos >= 0:
-                line = line[:cpos].strip()
-            if not line:
-                continue
-            self.add_config_cmd(line)
     def _send_config(self, prev_crc):
         # Build config commands
         for cb in self._config_callbacks:
             cb()
-        self._add_custom()
         self._config_cmds.insert(0, "allocate_oids count=%d" % (
             self._oid_count,))
         # Resolve pin names
@@ -83,94 +87,59 @@ class FPGA:
         config_crc = zlib.crc32('\n'.join(self._config_cmds)) & 0xffffffff
         self.add_config_cmd("finalize_config crc=%d" % (config_crc,))
         # Transmit config messages (if needed)
-        if prev_crc is None:
-            logging.info("Sending FPGA '%s' printer configuration...",
-                         self._name)
-            for c in self._config_cmds:
-                self._serial.send(c)
-        elif config_crc != prev_crc:
-            self._check_restart("CRC mismatch")
-            raise error("FPGA '%s' CRC does not match config" % (self._name,))
+        logging.info("Sending FPGA '%s' printer configuration...",
+                     self._name)
+        for c in self._config_cmds:
+            self._serial.send(c)
         # Transmit init messages
         for c in self._init_cmds:
             self._serial.send(c)
-    def _send_get_config(self):
-        get_config_cmd = self.lookup_query_command(
-            "get_config",
-            "config is_config=%c crc=%u move_count=%hu is_shutdown=%c")
-        if self.is_fileoutput():
-            return { 'is_config': 0, 'move_count': 500, 'crc': 0 }
-        config_params = get_config_cmd.send()
-        if self._is_shutdown:
-            raise error("FPGA '%s' error during config: %s" % (
-                self._name, self._shutdown_msg))
-        if config_params['is_shutdown']:
-            raise error("Can not update FPGA '%s' config as it is shutdown" % (
-                self._name,))
-        return config_params
     def _log_info(self):
-        msgparser = self._serial.get_msgparser()
         log_info = [
-            "Loaded FPGA '%s' %d commands (%s / %s)" % (
-                self._name, len(msgparser.messages_by_id),
-                msgparser.version, msgparser.build_versions),
+            "Loaded FPGA '%s'" % (self._name),
             "FPGA '%s' config: %s" % (self._name, " ".join(
-                ["%s=%s" % (k, v) for k, v in self.get_constants().items()]))]
+                ["%s=%s" % (k, v) for k, v in self._config.items()]))]
         return "\n".join(log_info)
     def _connect(self):
-        config_params = self._send_get_config()
-        if not config_params['is_config']:
-            if self._restart_method == 'rpi_usb':
-                # Only configure fpga after usb power reset
-                self._check_restart("full reset before config")
-            # Not configured - send config and issue get_config again
-            self._send_config(None)
-            config_params = self._send_get_config()
-            if not config_params['is_config'] and not self.is_fileoutput():
-                raise error("Unable to configure FPGA '%s'" % (self._name,))
-        else:
-            start_reason = self._printer.get_start_args().get("start_reason")
-            if start_reason == 'firmware_restart':
-                raise error("Failed automated reset of FPGA '%s'" % (
-                    self._name,))
-            # Already configured - send init commands
-            self._send_config(config_params['crc'])
+        #self._send_config(None)
         # Setup steppersync with the move_count returned by get_config
-        move_count = config_params['move_count']
-        self._steppersync = self._ffi_lib.steppersync_alloc(
-            self._serial.serialqueue, self._stepqueues, len(self._stepqueues),
-            move_count)
-        self._ffi_lib.steppersync_set_time(
-            self._steppersync, 0., self._fpga_freq)
+        move_count = self._config['move_cnt']
+        #self._steppersync = self._ffi_lib.steppersync_alloc(
+        #    self._serial.serialqueue, self._stepqueues, len(self._stepqueues),
+        #    move_count)
+        #self._ffi_lib.steppersync_set_time(
+        #    self._steppersync, 0., self._mcu_freq)
         # Log config information
         move_msg = "Configured FPGA '%s' (%d moves)" % (self._name, move_count)
         logging.info(move_msg)
-        log_info = self._log_info() + "\n" + move_msg
-        self._printer.set_rollover_info(self._name, log_info, log=False)
     def _mcu_identify(self):
         # our mcu is already identified. Configure fpga here and get version
         mcu = self._mcu
+
         cmd = mcu.lookup_query_command(
             "config_fpga fid=%c clk_pin=%u miso_pin=%u mosi_pin=%u cs_pin=%u "
             "program_pin=%u init_pin=%u done_pin=%u di_pin=%u",
             "fpga_init_done fid=%c", async=True, timeout=10, retry_time=100)
-        cmd.send([self._fid, 'PB3', 'PB4', 'PB5', 'PB0', 'PC13', 'PC14',
-            'PC15', 'PB1'])
+        rsp = cmd.send([self._fid, self._flash_clk, self._flash_miso,
+                  self._flash_mosi, self._flash_cs, self._program, self._init,
+                  self._done, self._di])
+        if rsp['fid'] != self._fid:
+            raise self._printer.config_error(
+                "invalid response during fpga identification")
+
+        cmd = mcu.lookup_query_command(
+            "fpga_setup fid=%c usart_bus=%u rate=%u timesync_pin=%u "
+            "serr_pin=%u sreset_pin=%u",
+            "fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
+            "endstop=%c uart=%c move_cnt=%u", async=True)
+        rsp = cmd.send([self._fid, self._usart_bus, self._usart_rate,
+                  self._timesync, self._serr, self._sreset])
+        if rsp['fid'] != self._fid or rsp['version'] != 66:
+            raise self._printer.config_error(
+                "invalid response during fpga identification")
+        del rsp['fid']
+        self._config = {k: rsp[k] for k in rsp if not k.startswith('#')}
         logging.info(self._log_info())
-        ppins = self._printer.lookup_object('pins')
-        pin_resolver = ppins.get_pin_resolver(self._name)
-        for cname, value in self.get_constants().items():
-            if cname.startswith("RESERVE_PINS_"):
-                for pin in value.split(','):
-                    pin_resolver.reserve_pin(pin, cname[13:])
-        self._fpga_freq = self.get_constant_float('CLOCK_FREQ')
-        self._emergency_stop_cmd = self.lookup_command("emergency_stop")
-        self._reset_cmd = self.try_lookup_command("reset")
-        self._config_reset_cmd = self.try_lookup_command("config_reset")
-        ext_only = self._reset_cmd is None and self._config_reset_cmd is None
-        mbaud = self._serial.get_msgparser().get_constant('SERIAL_BAUD', None)
-        if self._restart_method is None and mbaud is None and not ext_only:
-            self._restart_method = 'command'
     # Config creation helpers
     def setup_pin(self, pin_type, pin_params):
         pcs = {'endstop': FPGA_endstop,
@@ -247,45 +216,9 @@ class FPGA:
             or (self._is_shutdown and not force)):
             return
         self._emergency_stop_cmd.send()
-    def _restart_arduino(self):
-        logging.info("Attempting FPGA '%s' reset", self._name)
-        self._disconnect()
-        serialhdl.arduino_reset(self._serialport, self._reactor)
-    def _restart_via_command(self):
-        if ((self._reset_cmd is None and self._config_reset_cmd is None)
-            or not self._clocksync.is_active()):
-            logging.info("Unable to issue reset command on FPGA '%s'",
-                         self._name)
-            return
-        if self._reset_cmd is None:
-            # Attempt reset via config_reset command
-            logging.info("Attempting FPGA '%s' config_reset command", self._name)
-            self._is_shutdown = True
-            self._shutdown(force=True)
-            self._reactor.pause(self._reactor.monotonic() + 0.015)
-            self._config_reset_cmd.send()
-        else:
-            # Attempt reset via reset command
-            logging.info("Attempting FPGA '%s' reset command", self._name)
-            self._reset_cmd.send()
-        self._reactor.pause(self._reactor.monotonic() + 0.015)
-        self._disconnect()
-    def _restart_rpi_usb(self):
-        logging.info("Attempting FPGA '%s' reset via rpi usb power", self._name)
-        self._disconnect()
-        chelper.run_hub_ctrl(0)
-        self._reactor.pause(self._reactor.monotonic() + 2.)
-        chelper.run_hub_ctrl(1)
     def microcontroller_restart(self):
-        if self._restart_method == 'rpi_usb':
-            self._restart_rpi_usb()
-        elif self._restart_method == 'command':
-            self._restart_via_command()
-        else:
-            self._restart_arduino()
+        pass
     # Misc external commands
-    def is_fileoutput(self):
-        return self._printer.get_start_args().get('debugoutput') is not None
     def is_shutdown(self):
         return self._is_shutdown
     def flush_moves(self, print_time):
