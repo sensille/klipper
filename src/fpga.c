@@ -332,7 +332,7 @@ command_fpga_setup(uint32_t *args)
     // processing continues in the callback for get_version
 }
 DECL_COMMAND(command_fpga_setup,
-    "fpga_setup oid=%c usart_bus=%u rate=%u timesync_pin=%u "
+    "fpga_setup fid=%c usart_bus=%u rate=%u timesync_pin=%u "
     "serr_pin=%u sreset_pin=%u");
 
 static void
@@ -366,6 +366,18 @@ rsp_get_version(fpga_t *f, uint32_t *args)
     cur &= ~0xffff;
 
     fpga_send(f, &cmd_sync_time, cur, high);
+
+    uint32_t a1 = args[1];
+    uint32_t a2 = args[2];
+
+    sendf("fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
+        "endstop=%c uart=%c move_cnt=%u", f->fid, f->version,
+        a1 >> 24,          // gpio
+        (a1 >> 16) & 0xff, // pwm
+        (a1 >> 8) & 0xff,  // stepper
+        a1 & 0xff,         // endstop
+        a2 >> 24,          // uart
+        a2 & 0xffff);      // move_count
 }
 
 void
@@ -645,7 +657,7 @@ struct response_handler_s {
     uint8_t nargs;
     void (*func)(fpga_t *, uint32_t *);
 } response_handlers[] = {
-    { 1, rsp_get_version },
+    { 3, rsp_get_version },
     { 2, rsp_get_uptime },
     { 1, rsp_stepper_get_pos },
     { 2, rsp_endstop_state },
