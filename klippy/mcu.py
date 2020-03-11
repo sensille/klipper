@@ -308,10 +308,12 @@ class MCU_adc:
 class RetryAsyncCommand:
     TIMEOUT_TIME = 5.0
     RETRY_TIME = 0.500
-    def __init__(self, serial, name, oid=None):
+    def __init__(self, serial, name, oid=None, timeout=None, retry_time=None):
         self.serial = serial
         self.name = name
         self.oid = oid
+        self._timeout = timeout or TIMEOUT_TIME
+        self._retry_time = retry_time or RETRY_TIME
         self.reactor = serial.get_reactor()
         self.completion = self.reactor.completion()
         self.min_query_time = self.reactor.monotonic()
@@ -324,12 +326,12 @@ class RetryAsyncCommand:
         self.serial.raw_send_wait_ack(cmd, minclock, minclock, cmd_queue)
         first_query_time = query_time = self.reactor.monotonic()
         while 1:
-            params = self.completion.wait(query_time + self.RETRY_TIME)
+            params = self.completion.wait(query_time + self._retry_time)
             if params is not None:
                 self.serial.register_response(None, self.name, self.oid)
                 return params
             query_time = self.reactor.monotonic()
-            if query_time > first_query_time + self.TIMEOUT_TIME:
+            if query_time > first_query_time + self._timeout_time:
                 self.serial.register_response(None, self.name, self.oid)
                 raise error("Timeout on wait for '%s' response" % (self.name,))
             self.serial.raw_send(cmd, minclock, minclock, cmd_queue)
@@ -337,21 +339,27 @@ class RetryAsyncCommand:
 # Wrapper around query commands
 class CommandQueryWrapper:
     def __init__(self, serial, msgformat, respformat, oid=None,
-                 cmd_queue=None, async=False):
+                 cmd_queue=None, async=False, timeout=None, retry_time=None):
         self._serial = serial
         self._cmd = serial.get_msgparser().lookup_command(msgformat)
         serial.get_msgparser().lookup_command(respformat)
         self._response = respformat.split()[0]
         self._oid = oid
         self._xmit_helper = serialhdl.SerialRetryCommand
+        self._kwargs = {}
         if async:
             self._xmit_helper = RetryAsyncCommand
+            if timeout is not None:
+                self._kwargs['timeout'] = timeout
+            if retry_time is not None:
+                self._kwargs['retry_time'] = retry_time
         if cmd_queue is None:
             cmd_queue = serial.get_default_command_queue()
         self._cmd_queue = cmd_queue
     def send(self, data=(), minclock=0):
         cmd = self._cmd.encode(data)
-        xh = self._xmit_helper(self._serial, self._response, self._oid)
+        xh = self._xmit_helper(self._serial, self._response, self._oid,
+                               **self._kwargs)
         try:
             return xh.get_response(cmd, self._cmd_queue, minclock=minclock)
         except serialhdl.error as e:
@@ -642,10 +650,10 @@ class MCU:
         return self._serial.alloc_command_queue()
     def lookup_command(self, msgformat, cq=None):
         return CommandWrapper(self._serial, msgformat, cq)
-    def lookup_query_command(self, msgformat, respformat, oid=None,
-                             cq=None, async=False):
+    def lookup_query_command(self, msgformat, respformat, oid=None, cq=None,
+                             async=False, timeout=None, retry_time=None):
         return CommandQueryWrapper(self._serial, msgformat, respformat, oid,
-                                   cq, async)
+                                   cq, async, timeout, retry_time)
     def try_lookup_command(self, msgformat):
         try:
             return self.lookup_command(msgformat)
