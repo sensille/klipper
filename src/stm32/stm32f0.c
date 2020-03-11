@@ -10,8 +10,11 @@
 #include "command.h" // DECL_CONSTANT_STR
 #include "internal.h" // enable_pclock
 #include "sched.h" // sched_main
+#include "generic/misc.h" // dynmem_end
 
 #define FREQ_PERIPH 48000000
+
+static void check_bootloader(void);
 
 // Enable a peripheral clock
 void
@@ -206,6 +209,8 @@ mco_setup(void)
 void
 armcm_main(void)
 {
+    check_bootloader();
+
     if (CONFIG_USBSERIAL && CONFIG_MACH_STM32F042
         && *(uint64_t*)USB_BOOT_FLAG_ADDR == USB_BOOT_FLAG) {
         *(uint64_t*)USB_BOOT_FLAG_ADDR = 0;
@@ -244,3 +249,47 @@ armcm_main(void)
 
     sched_main();
 }
+
+#define BOOTLOADER_MAGIC 0xb00710ad
+static uint32_t *bootloader_magic;
+static void
+check_bootloader(void)
+{
+    void (*SysMemBootJump)(void);
+
+    bootloader_magic = dynmem_end() - 4;
+    if (*bootloader_magic != BOOTLOADER_MAGIC)
+        return;
+
+    *bootloader_magic = 0;
+
+    __set_MSP(0x20002250);
+    // 0x1fffC800 is "System Memory" start address for STM32 F0xx
+    // Point the PC to the System Memory reset vector (+4)
+    SysMemBootJump = (void (*)(void)) (*((uint32_t *) 0x1fffC804));
+
+    SysMemBootJump();
+}
+
+static uint_fast8_t
+jump_to_bootloader(struct timer *t)
+{
+    *bootloader_magic = BOOTLOADER_MAGIC;
+    NVIC_SystemReset();
+
+    return 0; // not reached
+}
+
+struct timer boot_timer;
+void
+command_bootloader(uint32_t *args)
+{
+    // give the system time to acknowledge the request before executing it
+    irq_disable();
+    boot_timer.func = jump_to_bootloader;
+    boot_timer.waketime = timer_read_time() + timer_from_us(1000000);
+    sched_add_timer(&boot_timer);
+    irq_enable();
+
+}
+DECL_COMMAND_FLAGS(command_bootloader, HF_IN_SHUTDOWN, "bootloader");
