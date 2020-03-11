@@ -312,8 +312,8 @@ class RetryAsyncCommand:
         self.serial = serial
         self.name = name
         self.oid = oid
-        self._timeout = timeout or TIMEOUT_TIME
-        self._retry_time = retry_time or RETRY_TIME
+        self._timeout = timeout or self.TIMEOUT_TIME
+        self._retry_time = retry_time or self.RETRY_TIME
         self.reactor = serial.get_reactor()
         self.completion = self.reactor.completion()
         self.min_query_time = self.reactor.monotonic()
