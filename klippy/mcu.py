@@ -422,6 +422,10 @@ class MCU:
         self._mcu_tick_avg = 0.
         self._mcu_tick_stddev = 0.
         self._mcu_tick_awake = 0.
+        self._fid = 0
+    def create_fid(self):
+        self._fid += 1
+        return self._fid - 1
     # Serial callbacks
     def _handle_mcu_stats(self, params):
         count = params['count']
