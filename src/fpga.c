@@ -19,6 +19,7 @@
 #include "stm32/internal.h" // gpio_peripheral
 #endif
 
+#define MAX_FPGA 8
 #define F_BUFSZ 128
 #define F_WRAP(p) ((p) & (F_BUFSZ - 1))
 #define F_NEXT(p) F_WRAP((p) + 1)
@@ -26,7 +27,7 @@
 static struct task_wake fpga_config_wake;
 static struct task_wake fpga_serial_wake;
 typedef struct fpga_s {
-    uint8_t         oid;
+    uint8_t         fid;
     uint8_t         last_oid;   /* cache for responses */
     struct gpio_out clk;
     struct gpio_in miso;
@@ -56,6 +57,8 @@ typedef struct {
     uint8_t     msg_id;
     uint8_t     nparams;
 } fpga_cmd_t;
+
+fpga_t *fpgas[MAX_FPGA];
 
 static void fpga_rx_byte(void *, uint_fast8_t);
 static int fpga_get_tx_byte(void *, uint8_t *);
@@ -131,8 +134,18 @@ ndelay(uint32_t nsecs)
 void
 command_config_fpga(uint32_t *args)
 {
-    fpga_t *f = oid_alloc(args[0], command_config_fpga, sizeof(*f));
-    f->oid = args[0];
+    uint8_t fid = args[0];
+    fpga_t *f;
+
+    if (fid >= MAX_FPGA)
+        shutdown("fid out of range");
+    if (fpgas[fid] != NULL)
+        shutdown("fid already allocated");
+
+    f = alloc_chunk(sizeof(*f));
+    fpgas[fid] = f;
+
+    f->fid = fid;
     /* spi to flash */
     f->clk = gpio_out_setup(args[1], 0);
     f->miso = gpio_in_setup(args[2], 0);
@@ -151,14 +164,24 @@ command_config_fpga(uint32_t *args)
     sched_wake_task(&fpga_config_wake);
 }
 DECL_COMMAND(command_config_fpga,
-             "config_fpga oid=%c clk_pin=%u miso_pin=%u mosi_pin=%u cs_pin=%u "
+             "config_fpga fid=%c clk_pin=%u miso_pin=%u mosi_pin=%u cs_pin=%u "
              "program_pin=%u init_pin=%u done_pin=%u di_pin=%u");
 
 void
 command_config_fpga_noinit(uint32_t *args)
 {
-    fpga_t *f = oid_alloc(args[0], command_config_fpga, sizeof(*f));
-    f->oid = args[0];
+    uint8_t fid = args[0];
+    fpga_t *f;
+
+    if (fid >= MAX_FPGA)
+        shutdown("fid out of range");
+    if (fpgas[fid] != NULL)
+        shutdown("fid already allocated");
+
+    f = alloc_chunk(sizeof(*f));
+    fpgas[fid] = f;
+
+    f->fid = fid;
     /* slave serial to fpga */
     f->program = gpio_out_setup(args[1], 1);
     f->done = gpio_in_setup(args[2], 1);
@@ -170,17 +193,21 @@ command_config_fpga_noinit(uint32_t *args)
     f->state = FS_INITIALIZED;
 }
 DECL_COMMAND(command_config_fpga_noinit,
-             "config_fpga_noinit oid=%c program_pin=%u done_pin=%u");
+             "config_fpga_noinit fid=%c program_pin=%u done_pin=%u");
 
 void
 fpga_config_task(void)
 {
-    uint8_t oid;
     fpga_t *f;
     int wake = 0;
     int i;
+    int n;
 
-    foreach_oid(oid, f, command_config_fpga) {
+    for (n = 0; n < MAX_FPGA; ++n) {
+        f = fpgas[n];
+        if (f == NULL)
+            continue;
+
         if (f->state == FS_INIT_FLASH) {
             uint32_t data = 0x03000000;
 
@@ -253,7 +280,7 @@ fpga_config_task(void)
             if (++f->cnt >= 16384)
                 shutdown("fpga config error (done not set)");
         } else if (f->state == FS_SEND_RESPONSE) {
-            sendf("fpga_init_done oid=%c", oid);
+            sendf("fpga_init_done fid=%c", f->fid);
             f->state = FS_INITIALIZED;
         }
         if (f->state != FS_INITIALIZED)
@@ -263,10 +290,21 @@ fpga_config_task(void)
         sched_wake_task(&fpga_config_wake);
 }
 
+static fpga_t *
+fid_lookup(uint8_t fid)
+{
+    if (fid >= MAX_FPGA)
+        shutdown("fid out of range");
+    if (fpgas[fid] == NULL)
+        shutdown("fid not allocated");
+
+    return fpgas[fid];
+}
+
 void
 command_fpga_setup(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[0], command_config_fpga);
+    fpga_t *f = fid_lookup(args[0]);
 
     serial_setup(args[1], args[2], fpga_rx_byte, fpga_get_tx_byte, f);
 
@@ -333,16 +371,16 @@ rsp_get_version(fpga_t *f, uint32_t *args)
 void
 command_fpga_get_uptime(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[0], command_config_fpga);
+    fpga_t *f = fid_lookup(args[0]);
 
     fpga_send(f, &cmd_get_uptime);
 }
-DECL_COMMAND(command_fpga_get_uptime, "fpga_get_uptime oid=%c");
+DECL_COMMAND(command_fpga_get_uptime, "fpga_get_uptime fid=%c");
 
 static void
 rsp_get_uptime(fpga_t *f, uint32_t *args)
 {
-    sendf("fpga_uptime oid=%c high=%u clock=%u", f->oid, args[1], args[0]);
+    sendf("fpga_uptime fid=%c high=%u clock=%u", f->fid, args[1], args[0]);
 }
 
 typedef struct {
@@ -353,7 +391,7 @@ typedef struct {
 void
 command_fpga_config_pwm(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_t *f = fid_lookup(args[1]);
     fpga_pwm_t *p = oid_alloc(args[0], command_fpga_config_pwm, sizeof(*p));
 
     p->fpga = f;
@@ -361,7 +399,7 @@ command_fpga_config_pwm(uint32_t *args)
 
     fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4], args[5], args[6]);
 }
-DECL_COMMAND(command_fpga_config_pwm, "fpga_config_pwm oid=%c fpga_oid=%c "
+DECL_COMMAND(command_fpga_config_pwm, "fpga_config_pwm oid=%c fpga_fid=%c "
     "channel=%c cycle-ticks=%u on-ticks=%u default=%c max_duration=%u");
 
 void
@@ -383,7 +421,7 @@ typedef struct {
 void
 command_fpga_config_tmcuart(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_t *f = fid_lookup(args[1]);
     fpga_tmcuart_t *t = oid_alloc(args[0], command_fpga_config_tmcuart,
         sizeof(*t));
 
@@ -392,7 +430,7 @@ command_fpga_config_tmcuart(uint32_t *args)
     t->slave = args[3];
 }
 DECL_COMMAND(command_fpga_config_tmcuart, "fpga_config_tmcuart oid=%c "
-    "fpga_oid=%c channel=%c slave=%c");
+    "fpga_fid=%c channel=%c slave=%c");
 
 void
 command_fpga_tmcuart_read(uint32_t *args)
@@ -431,7 +469,7 @@ typedef struct {
 void
 command_fpga_config_stepper(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_t *f = fid_lookup(args[1]);
     fpga_stepper_t *s = oid_alloc(args[0], command_fpga_config_stepper,
         sizeof(*s));
 
@@ -441,7 +479,7 @@ command_fpga_config_stepper(uint32_t *args)
     fpga_send(f, &cmd_config_stepper, args[2], args[3]);
 }
 DECL_COMMAND(command_fpga_config_stepper,
-    "fpga_config_stepper oid=%c fpga_oid=%c channel=%c dedge=%c");
+    "fpga_config_stepper oid=%c fpga_fid=%c channel=%c dedge=%c");
 
 void
 command_fpga_queue_step(uint32_t *args)
@@ -501,7 +539,7 @@ typedef struct {
 void
 command_fpga_config_endstop(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_t *f = fid_lookup(args[1]);
     fpga_endstop_t *e = oid_alloc(args[0], command_fpga_config_endstop,
         sizeof(*e));
 
@@ -509,7 +547,7 @@ command_fpga_config_endstop(uint32_t *args)
     e->channel = args[2];
 }
 DECL_COMMAND(command_fpga_config_endstop,
-    "fpga_config_endstop oid=%c fpga_oid=%c channel=%c");
+    "fpga_config_endstop oid=%c fpga_fid=%c channel=%c");
 
 void
 command_fpga_endstop_set_stepper(uint32_t *args)
@@ -554,12 +592,12 @@ DECL_COMMAND(command_fpga_endstop_home,
 void
 command_fpga_set_digital_out(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[0], command_config_fpga);
+    fpga_t *f = fid_lookup(args[0]);
 
     fpga_send(f, &cmd_set_digital_out, args[0], args[1]);
 }
 DECL_COMMAND(command_fpga_set_digital_out,
-    "fpga_set_digital_out oid=%c channel=%c pin_value=%c");
+    "fpga_set_digital_out fid=%c channel=%c pin_value=%c");
 
 typedef struct {
     fpga_t  *fpga;
@@ -568,7 +606,7 @@ typedef struct {
 void
 command_fpga_config_digital_out(uint32_t *args)
 {
-    fpga_t *f = oid_lookup(args[1], command_config_fpga);
+    fpga_t *f = fid_lookup(args[1]);
     fpga_digital_out_t *d = oid_alloc(args[0], command_fpga_config_digital_out,
         sizeof(*d));
 
@@ -578,8 +616,8 @@ command_fpga_config_digital_out(uint32_t *args)
     fpga_send(f, &cmd_config_digital_out, args[2], args[3], args[4], args[5]);
 }
 DECL_COMMAND(command_fpga_config_digital_out,
-    "fpga_config_digital_out oid=%c channel=%c value=%c default_value=%c "
-    "max_duration=%u");
+    "fpga_config_digital_out oid=%c fpga_fid=%c channel=%c value=%c "
+    "default_value=%c max_duration=%u");
 
 void
 command_fpga_schedule_digital_out(uint32_t *args)
@@ -732,14 +770,17 @@ f_parseint(fpga_t *f, uint8_t *ptr)
 void
 fpga_serial_task(void)
 {
-    uint8_t oid;
     fpga_t *f;
     int wake = 0;
+    int i;
+    int n;
 
     // check if we have a full packet and process it
-    int i;
+    for (n = 0; n < MAX_FPGA; ++n) {
+        f = fpgas[n];
+        if (f == NULL)
+            continue;
 
-    foreach_oid(oid, f, command_config_fpga) {
         uint8_t rcvd;
         uint8_t l;
         uint8_t ptr;
