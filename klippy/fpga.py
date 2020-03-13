@@ -7,11 +7,19 @@
 import sys, os, zlib, logging, math
 import serialhdl, pins, chelper, mcu, clocksync
 
-class error(Exception):
-    pass
+# Wrapper around command sending
+class CommandWrapper:
+    def __init__(self, fpga, mcu, msgformat, cmd_queue=None):
+        self._serial = serial
+        self._cmd = serial.get_msgparser().lookup_command(msgformat)
+        if cmd_queue is None:
+            cmd_queue = serial.get_default_command_queue()
+        self._cmd_queue = cmd_queue
+    def send(self, data=(), minclock=0, reqclock=0):
+        cmd = self._cmd.encode(data)
+        self._serial.raw_send(cmd, minclock, reqclock, self._cmd_queue)
 
 class FPGA:
-    error = error
     def __init__(self, config):
         self._printer = printer = config.get_printer()
         self._reactor = printer.get_reactor()
@@ -42,7 +50,6 @@ class FPGA:
         self._emergency_stop_cmd = None
         # Config building
         printer.lookup_object('pins').register_chip(self._name, self)
-        print("##### register chip %s" % (self._name))
         self._oid_count = 0
         self._config_callbacks = []
         self._init_cmds = []
@@ -56,44 +63,6 @@ class FPGA:
         self._stepqueues = []
         self._steppersync = None
         printer.add_object('mcu ' + self._name, self)
-    # Serial callbacks
-    # Connection phase
-    def _check_restart(self, reason):
-        start_reason = self._printer.get_start_args().get("start_reason")
-        if start_reason == 'firmware_restart':
-            return
-        logging.info("Attempting automated FPGA '%s' restart: %s",
-                     self._name, reason)
-        self._printer.request_exit('firmware_restart')
-        self._reactor.pause(self._reactor.monotonic() + 2.000)
-        raise error("Attempt FPGA '%s' restart failed" % (self._name,))
-    def _send_config(self, prev_crc):
-        # Build config commands
-        for cb in self._config_callbacks:
-            cb()
-        self._config_cmds.insert(0, "allocate_oids count=%d" % (
-            self._oid_count,))
-        # Resolve pin names
-        fpga_type = self._serial.get_msgparser().get_constant('FPGA')
-        ppins = self._printer.lookup_object('pins')
-        pin_resolver = ppins.get_pin_resolver(self._name)
-        if self._pin_map is not None:
-            pin_resolver.add_pin_mapping(fpga_type, self._pin_map)
-        for i, cmd in enumerate(self._config_cmds):
-            self._config_cmds[i] = pin_resolver.update_command(cmd)
-        for i, cmd in enumerate(self._init_cmds):
-            self._init_cmds[i] = pin_resolver.update_command(cmd)
-        # Calculate config CRC
-        config_crc = zlib.crc32('\n'.join(self._config_cmds)) & 0xffffffff
-        self.add_config_cmd("finalize_config crc=%d" % (config_crc,))
-        # Transmit config messages (if needed)
-        logging.info("Sending FPGA '%s' printer configuration...",
-                     self._name)
-        for c in self._config_cmds:
-            self._serial.send(c)
-        # Transmit init messages
-        for c in self._init_cmds:
-            self._serial.send(c)
     def _log_info(self):
         log_info = [
             "Loaded FPGA '%s'" % (self._name),
@@ -101,7 +70,6 @@ class FPGA:
                 ["%s=%s" % (k, v) for k, v in self._config.items()]))]
         return "\n".join(log_info)
     def _connect(self):
-        #self._send_config(None)
         # Setup steppersync with the move_count returned by get_config
         move_count = self._config['move_cnt']
         #self._steppersync = self._ffi_lib.steppersync_alloc(
@@ -142,30 +110,27 @@ class FPGA:
         logging.info(self._log_info())
     # Config creation helpers
     def setup_pin(self, pin_type, pin_params):
-        pcs = {'endstop': FPGA_endstop,
-               'digital_out': FPGA_digital_out, 'pwm': FPGA_pwm, 'adc': FPGA_adc}
+        pcs = {'endstop': mcu.MCU_endstop,
+               'digital_out': mcu.MCU_digital_out, 'pwm': mcu.MCU_pwm}
         if pin_type not in pcs:
             raise pins.error("pin type %s not supported on fpga" % (pin_type,))
         return pcs[pin_type](self, pin_params)
     def create_oid(self):
-        self._oid_count += 1
-        return self._oid_count - 1
+        return self._mcu.create_oid()
     def register_config_callback(self, cb):
-        self._config_callbacks.append(cb)
+        self._mcu.register_config_callback(cb)
     def add_config_cmd(self, cmd, is_init=False):
-        if is_init:
-            self._init_cmds.append(cmd)
-        else:
-            self._config_cmds.append(cmd)
+        self._remap_cmd(cmd)
+        self._mcu.add_config_cmd(cmd, is_init)
     def get_query_slot(self, oid):
-        slot = self.seconds_to_clock(oid * .01)
-        t = int(self.estimated_print_time(self._reactor.monotonic()) + 1.5)
-        return self.print_time_to_clock(t) + slot
+        return self._mcu.get_query_slot(oid)
     def register_stepqueue(self, stepqueue):
+        raise "XXX"
         self._stepqueues.append(stepqueue)
     def seconds_to_clock(self, time):
-        return int(time * self._fpga_freq)
+        return self._mcu.seconds_to_clock(time)
     def get_max_stepper_error(self):
+        raise "XXX"
         return self._max_stepper_error
     # Wrapper functions
     def get_printer(self):
@@ -173,13 +138,17 @@ class FPGA:
     def get_name(self):
         return self._name
     def register_response(self, cb, msg, oid=None):
+        raise "XXX"
         self._serial.register_response(cb, msg, oid)
     def alloc_command_queue(self):
-        return self._serial.alloc_command_queue()
+        return self._mcu.alloc_command_queue()
     def lookup_command(self, msgformat, cq=None):
-        return CommandWrapper(self._serial, msgformat, cq)
+        print("lookup ", msgformat)
+        return self._mcu.lookup_command(msgformat, cq)
+        #return mcu.CommandWrapper(self._serial, msgformat, cq)
     def lookup_query_command(self, msgformat, respformat, oid=None,
                              cq=None, async=False):
+        raise "XXX"
         return CommandQueryWrapper(self._serial, msgformat, respformat, oid,
                                    cq, async)
     def try_lookup_command(self, msgformat):
@@ -188,22 +157,28 @@ class FPGA:
         except self._serial.get_msgparser().error as e:
             return None
     def lookup_command_id(self, msgformat):
+        raise "XXX"
         return self._serial.get_msgparser().lookup_command(msgformat).msgid
     def get_enumerations(self):
+        raise "XXX"
         return self._serial.get_msgparser().get_enumerations()
     def get_constants(self):
+        raise "XXX"
         return self._serial.get_msgparser().get_constants()
     def get_constant_float(self, name):
+        raise "XXX"
         return self._serial.get_msgparser().get_constant_float(name)
     def print_time_to_clock(self, print_time):
-        return self._clocksync.print_time_to_clock(print_time)
+        return self._mcu.print_time_to_clock(print_time)
     def clock_to_print_time(self, clock):
         return self._clocksync.clock_to_print_time(clock)
     def estimated_print_time(self, eventtime):
-        return self._clocksync.estimated_print_time(eventtime)
+        return self._mcu.estimated_print_time(eventtime)
     def get_adjusted_freq(self):
+        raise "XXX"
         return self._clocksync.get_adjusted_freq()
     def clock32_to_clock64(self, clock32):
+        raise "XXX"
         return self._clocksync.clock32_to_clock64(clock32)
     # Restarts
     def _disconnect(self):
@@ -220,8 +195,10 @@ class FPGA:
         pass
     # Misc external commands
     def is_shutdown(self):
+        raise "XXX"
         return self._is_shutdown
     def flush_moves(self, print_time):
+        raise "XXX"
         if self._steppersync is None:
             return
         clock = self.print_time_to_clock(print_time)
@@ -232,6 +209,7 @@ class FPGA:
             raise error("Internal error in FPGA '%s' stepcompress" % (
                 self._name,))
     def check_active(self, print_time, eventtime):
+        raise "XXX"
         if self._steppersync is None:
             return
         offset, freq = self._clocksync.calibrate_clock(print_time, eventtime)
@@ -247,5 +225,8 @@ class FPGA:
     def __del__(self):
         self._disconnect()
 
-def load_config_prefix(config):
-    return FPGA(config)
+def add_printer_objects(config):
+    printer = config.get_printer()
+    for s in config.get_prefix_sections('fpga '):
+        fpga = FPGA(s)
+        printer.add_object('mcu ' + fpga.get_name(), fpga)
