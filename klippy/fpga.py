@@ -4,8 +4,56 @@
 # Copyright (C) 2020  Arne Jansen <arne@die-jansens.de>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import sys, os, zlib, logging, math
+import sys, os, zlib, logging, math, re
 import serialhdl, pins, chelper, mcu, clocksync
+
+class FPGA_tmc_uart:
+    def __init__(self, rx_pin_params, tx_pin_params, select_pins_desc, addr):
+        self._mcu = rx_pin_params['chip']
+        self.rx_pin = rx_pin_params['pin']
+        self.addr = addr
+        if select_pins_desc is not None:
+            raise self._mcu.get_printer().config_error(
+                "select_pins not supported for FPGA tmc_uart")
+        if tx_pin_params != rx_pin_params:
+            raise self._mcu.get_printer().config_error(
+                "separate tx pin not supported for FPGA tmc_uart")
+        self.oid = self._mcu.create_oid()
+        self._registered = False
+        self.tmcuart_send_cmd = None
+        self.mutex = self._mcu.get_printer().get_reactor().mutex()
+        self._mcu.register_config_callback(self.build_config)
+    def build_config(self):
+        self._mcu.add_config_cmd(
+            "config_tmcuart oid=%d rx_pin=%s slave=%d"
+            % (self.oid, self.rx_pin, self.addr))
+        self.tmcuart_read_cmd = self._mcu.lookup_query_command(
+            "tmcuart_read oid=%c register=%c",
+            "tmcuart_data oid=%c status=%c data=%u", oid=self.oid, async=True)
+        self.tmcuart_write_cmd = self._mcu.lookup_command(
+            "tmcuart_write oid=%c register=%c data=%u")
+    def register_instance(self, rx_pin_params, tx_pin_params,
+                          select_pins_desc, addr):
+        if self._registered:
+            raise self._mcu.get_printer().config_error(
+                "Only one instance for FPGA uarts allowed")
+        self._registered = True
+        return 1
+    def reg_read(self, instance_id, addr, reg):
+        if addr != self.addr:
+            raise "XXX move addressing to each command"
+        rsp = self.tmcuart_read_cmd.send([self.oid, reg])
+        if rsp['status'] != 0:
+            raise "XXX runtime error"
+        return rsp['data']
+    def reg_write(self, instance_id, addr, reg, val, print_time=None):
+        if addr != self.addr:
+            raise "XXX move addressing to each command"
+        minclock = 0
+        if print_time is not None:
+            minclock = self.mcu.print_time_to_clock(print_time)
+        self.tmcuart_write_cmd.send([self.oid, reg, val], minclock=minclock)
+
 
 # Wrapper around command sending
 class CommandWrapper:
@@ -20,6 +68,26 @@ class CommandWrapper:
         self._serial.raw_send(cmd, minclock, reqclock, self._cmd_queue)
 
 class FPGA:
+    _cmds_with_fid = ('config_digital_out')
+    _cmdmap = {
+        # Value: (fid-needed, pin remapping)
+        #        pin remapping: (index, (classes))
+        'config_digital_out': (True, ((2, 'channel', ('pwm', 'gpio')),)),
+        'schedule_digital_out': (False, ()),
+        'config_soft_pwm_out': (True, ((2, 'channel', ('pwm',)),)),
+        'schedule_soft_pwm_out': (False, ()),
+        'config_tmcuart': (True, ((2, 'channel', ('uart')),)),
+        'tmcuart_read': (False, ()),
+        'tmcuart_write': (False, ()),
+        'tmcuart_data': (False, ()),
+        'config_stepper': (True, ((2, 'step', ('step',)),
+                                  (3, 'dir',  ('dir',)))),
+        'reset_step_clock': (False, ()),
+        'queue_step': (False, ()),
+        'set_next_step_dir': (False, ()),
+        'stepper_get_position': (False, ()),
+        'stepper_position': (False, ()),
+    }
     def __init__(self, config):
         self._printer = printer = config.get_printer()
         self._reactor = printer.get_reactor()
@@ -60,7 +128,7 @@ class FPGA:
         ffi_main, self._ffi_lib = chelper.get_ffi()
         self._max_stepper_error = config.getfloat(
             'max_stepper_error', 0.000025, minval=0.)
-        self._stepqueues = []
+        #self._stepqueues = []
         self._steppersync = None
         printer.add_object('mcu ' + self._name, self)
     def _log_info(self):
@@ -107,6 +175,9 @@ class FPGA:
                 "invalid response during fpga identification")
         del rsp['fid']
         self._config = {k: rsp[k] for k in rsp if not k.startswith('#')}
+        self._classes = {k: rsp[k] for k in ('gpio', 'pwm', 'endstop', 'uart')}
+        self._classes['step'] = rsp['stepper']
+        self._classes['dir'] = rsp['stepper']
         logging.info(self._log_info())
     # Config creation helpers
     def setup_pin(self, pin_type, pin_params):
@@ -120,17 +191,17 @@ class FPGA:
     def register_config_callback(self, cb):
         self._mcu.register_config_callback(cb)
     def add_config_cmd(self, cmd, is_init=False):
-        self._remap_cmd(cmd)
+        cmd = self._remap_cmd(cmd, True)
         self._mcu.add_config_cmd(cmd, is_init)
     def get_query_slot(self, oid):
         return self._mcu.get_query_slot(oid)
     def register_stepqueue(self, stepqueue):
-        raise "XXX"
-        self._stepqueues.append(stepqueue)
+        # XXX stepqueue
+        #self._stepqueues.append(stepqueue)
+        self._mcu.register_stepqueue(stepqueue)
     def seconds_to_clock(self, time):
         return self._mcu.seconds_to_clock(time)
     def get_max_stepper_error(self):
-        raise "XXX"
         return self._max_stepper_error
     # Wrapper functions
     def get_printer(self):
@@ -144,21 +215,24 @@ class FPGA:
         return self._mcu.alloc_command_queue()
     def lookup_command(self, msgformat, cq=None):
         print("lookup ", msgformat)
+        msgformat = self._remap_cmd(msgformat, False)
         return self._mcu.lookup_command(msgformat, cq)
         #return mcu.CommandWrapper(self._serial, msgformat, cq)
     def lookup_query_command(self, msgformat, respformat, oid=None,
                              cq=None, async=False):
-        raise "XXX"
-        return CommandQueryWrapper(self._serial, msgformat, respformat, oid,
-                                   cq, async)
+        print("lookup query/rsp", msgformat, respformat)
+        msgformat = self._remap_cmd(msgformat, False)
+        respformat = self._remap_cmd(respformat, False)
+        return self._mcu.lookup_query_command(msgformat, respformat, oid,
+                                              cq, async)
     def try_lookup_command(self, msgformat):
         try:
             return self.lookup_command(msgformat)
         except self._serial.get_msgparser().error as e:
             return None
     def lookup_command_id(self, msgformat):
-        raise "XXX"
-        return self._serial.get_msgparser().lookup_command(msgformat).msgid
+        msgformat = self._remap_cmd(msgformat, False)
+        return self._mcu.lookup_command_id(msgformat)
     def get_enumerations(self):
         raise "XXX"
         return self._serial.get_msgparser().get_enumerations()
@@ -175,8 +249,7 @@ class FPGA:
     def estimated_print_time(self, eventtime):
         return self._mcu.estimated_print_time(eventtime)
     def get_adjusted_freq(self):
-        raise "XXX"
-        return self._clocksync.get_adjusted_freq()
+        return self._mcu.get_adjusted_freq()
     def clock32_to_clock64(self, clock32):
         raise "XXX"
         return self._clocksync.clock32_to_clock64(clock32)
@@ -198,6 +271,7 @@ class FPGA:
         raise "XXX"
         return self._is_shutdown
     def flush_moves(self, print_time):
+        return # XXX
         raise "XXX"
         if self._steppersync is None:
             return
@@ -209,6 +283,7 @@ class FPGA:
             raise error("Internal error in FPGA '%s' stepcompress" % (
                 self._name,))
     def check_active(self, print_time, eventtime):
+        return self._mcu.check_active(print_time, eventtime)
         raise "XXX"
         if self._steppersync is None:
             return
@@ -224,6 +299,54 @@ class FPGA:
             self._name,))
     def __del__(self):
         self._disconnect()
+    def add_config_digital_out(self, oid, pin, value, default_value,
+                               max_duration):
+        if not pin.startswith('pwm'):
+            raise "XXX"
+        channel=int(pin[3:]) - 1
+        self._mcu.add_config_cmd(
+            "fpga_config_digital_out oid=%d fpga_fid=%s channel=%s value=%d "
+            "default_value=%d max_duration=%d"
+            % (oid, self._fid, channel, value, default_value, max_duration))
+    def tmc_uart(self, rx_pin_params, tx_pin_params, select_pins_desc, addr):
+        return FPGA_tmc_uart(rx_pin_params, tx_pin_params, select_pins_desc,
+                             addr)
+    def _remap_cmd(self, cmd, map_values):
+        print("cmd is ", cmd)
+        parts = cmd.split()
+        (need_fid, remap) = self._cmdmap[parts[0]]
+        print(remap)
+        if map is None:
+            return cmd
+        for (index, new_name, classes) in remap:
+            name, value = parts[index].split('=')
+            mapped = value
+            if map_values:
+                cls, number = self._resolve_pin(value)
+                if not cls in classes:
+                    raise self._printer.config_error(
+                        "pin %s not allowed here" % (value))
+                mapped = number
+            parts[index] = "%s=%d" % (new_name, mapped)
+        if need_fid:
+            parts.insert(1, "fid=%d" % (self._fid))
+        return "fpga_" + ' '.join(parts)
+    def _resolve_pin(self, pin):
+        match = re.match('^(\w+)(\d+)', pin)
+        if not match:
+                raise self._printer.config_error(
+                    "malformed pin name %s" % (pin))
+        cls = match.group(1)
+        number = int(match.group(2))
+        
+        max = self._classes[cls]
+        if max is None:
+                raise self._printer.config_error(
+                    "bad pin class %s" % (cls))
+        if number < 1 or number > max:
+                raise self._printer.config_error(
+                    "pin %s out of range" % (pin))
+        return (cls, number - 1)
 
 def add_printer_objects(config):
     printer = config.get_printer()

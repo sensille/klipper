@@ -301,7 +301,7 @@ class MessageParser:
                 msgformat, mp.msgformat))
         return mp
     def create_command(self, msg):
-        print("create_command: msg", msg)
+#        print("create_command: msg", msg)
         parts = msg.strip().split()
         if not parts:
             return ""

@@ -30,7 +30,14 @@ serial_rx_byte(uint_fast8_t data)
         sched_wake_tasks();
     if (receive_pos >= sizeof(receive_buf))
         // Serial overflow - ignore it as crc error will force retransmit
+{
+    static int _f = 0;
+    if (!_f) {
+        _f = 1;
+        output("rx overflow: data %c buf %*s", data, 48, receive_buf + 0x20);
         return;
+    }
+}
     receive_buf[receive_pos++] = data;
 }
 

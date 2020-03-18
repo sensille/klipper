@@ -149,6 +149,9 @@ class MCU_digital_out:
             " max_duration=%d" % (
                 self._oid, self._pin, self._start_value, self._shutdown_value,
                 self._mcu.seconds_to_clock(self._max_duration)))
+#        self._mcu.add_config_digital_out(oid=self._oid, pin=self._pin,
+#            value=self._start_value, default_value=self._shutdown_value,
+#            max_duration=self._mcu.seconds_to_clock(self._max_duration))
         cmd_queue = self._mcu.alloc_command_queue()
         self._set_cmd = self._mcu.lookup_command(
             "schedule_digital_out oid=%c clock=%u value=%c", cq=cmd_queue)
@@ -625,6 +628,7 @@ class MCU:
     def register_config_callback(self, cb):
         self._config_callbacks.append(cb)
     def add_config_cmd(self, cmd, is_init=False):
+        print("add config cmd ", cmd)
         if is_init:
             self._init_cmds.append(cmd)
         else:

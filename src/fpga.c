@@ -20,7 +20,7 @@
 #endif
 
 #define MAX_FPGA 8
-#define F_BUFSZ 128
+#define F_BUFSZ 256
 #define F_WRAP(p) ((p) & (F_BUFSZ - 1))
 #define F_NEXT(p) F_WRAP((p) + 1)
 
@@ -43,12 +43,12 @@ typedef struct fpga_s {
     uint32_t        cnt;       // number of pages sent or end-timer
     uint32_t        uart;
     uint32_t        version;   // FPGA version identifier
-    uint8_t         rx_head;
-    uint8_t         rx_tail;
+    uint16_t         rx_head;
+    uint16_t         rx_tail;
     uint8_t         rx_buf[F_BUFSZ];
     uint8_t         rx_seq;
-    uint8_t         tx_head;
-    uint8_t         tx_tail;
+    uint16_t         tx_head;
+    uint16_t         tx_tail;
     uint8_t         tx_buf[F_BUFSZ];
     uint8_t         tx_seq;
 } fpga_t;
@@ -403,16 +403,18 @@ typedef struct {
 void
 command_fpga_config_pwm(uint32_t *args)
 {
-    fpga_t *f = fid_lookup(args[1]);
-    fpga_pwm_t *p = oid_alloc(args[0], command_fpga_config_pwm, sizeof(*p));
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_pwm_t *p = oid_alloc(args[1], command_fpga_config_pwm, sizeof(*p));
 
     p->fpga = f;
     p->channel = args[2];
 
-    fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4], args[5], args[6]);
+    /* given value is either 0 or 1. map to pwm range */
+    fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4] ? args[3] : 0,
+              args[5], args[6]);
 }
-DECL_COMMAND(command_fpga_config_pwm, "fpga_config_pwm oid=%c fpga_fid=%c "
-    "channel=%c cycle-ticks=%u on-ticks=%u default=%c max_duration=%u");
+DECL_COMMAND(command_fpga_config_pwm, "fpga_config_soft_pwm_out fid=%c oid=%c "
+    "channel=%c cycle_ticks=%u value=%c default_value=%c max_duration=%u");
 
 void
 command_fpga_schedule_pwm(uint32_t *args)
@@ -421,8 +423,8 @@ command_fpga_schedule_pwm(uint32_t *args)
 
     fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], args[2]);
 }
-DECL_COMMAND(command_fpga_schedule_pwm, "fpga_schedule_pwm oid=%c clock=%u "
-    "on-ticks=%u");
+DECL_COMMAND(command_fpga_schedule_pwm,
+    "fpga_schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u");
 
 typedef struct {
     fpga_t  *fpga;
@@ -433,16 +435,16 @@ typedef struct {
 void
 command_fpga_config_tmcuart(uint32_t *args)
 {
-    fpga_t *f = fid_lookup(args[1]);
-    fpga_tmcuart_t *t = oid_alloc(args[0], command_fpga_config_tmcuart,
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_tmcuart_t *t = oid_alloc(args[1], command_fpga_config_tmcuart,
         sizeof(*t));
 
     t->fpga = f;
     t->channel = args[2];
     t->slave = args[3];
 }
-DECL_COMMAND(command_fpga_config_tmcuart, "fpga_config_tmcuart oid=%c "
-    "fpga_fid=%c channel=%c slave=%c");
+DECL_COMMAND(command_fpga_config_tmcuart, "fpga_config_tmcuart fid=%c oid=%c "
+    "channel=%c slave=%c");
 
 void
 command_fpga_tmcuart_read(uint32_t *args)
@@ -481,27 +483,42 @@ typedef struct {
 void
 command_fpga_config_stepper(uint32_t *args)
 {
-    fpga_t *f = fid_lookup(args[1]);
-    fpga_stepper_t *s = oid_alloc(args[0], command_fpga_config_stepper,
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_stepper_t *s = oid_alloc(args[1], command_fpga_config_stepper,
         sizeof(*s));
 
+    /*
+     * dir and step have to be equal, min_stop_interval and invert_step are
+     * ignored. dedge can't be configured
+     */
     s->fpga = f;
     s->channel = args[2];
 
-    fpga_send(f, &cmd_config_stepper, args[2], args[3]);
+    if (args[2] != args[3])
+        shutdown("dir and step have to be identical");
+
+    fpga_send(f, &cmd_config_stepper, args[2], 0);
 }
 DECL_COMMAND(command_fpga_config_stepper,
-    "fpga_config_stepper oid=%c fpga_fid=%c channel=%c dedge=%c");
+    "fpga_config_stepper fid=%c oid=%c step=%c dir=%c min_stop_interval=%u invert_step=%c");
+
 
 void
 command_fpga_queue_step(uint32_t *args)
 {
     fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
 
+    /*
+     * the hardware needs at least 4 clocks between segments. We just check
+     * for interval here. To be more precise we could calculate the total
+     * runtime from all parameters
+     */
+    if (args[1] < 4)
+        shutdown("minimal interval for queue_step is 4");
     fpga_send(s->fpga, &cmd_queue_step, s->channel, args[1], args[2], args[3]);
 }
 DECL_COMMAND(command_fpga_queue_step,
-    "fpga_queue_step oid=%c interval=%u count=%u add=%u");
+    "fpga_queue_step oid=%c interval=%u count=%hu add=%hi");
 
 void
 command_fpga_set_next_step_dir(uint32_t *args)
@@ -511,7 +528,7 @@ command_fpga_set_next_step_dir(uint32_t *args)
     fpga_send(s->fpga, &cmd_set_next_step_dir, s->channel, args[1]);
 }
 DECL_COMMAND(command_fpga_set_next_step_dir,
-    "fpga_set_next_step_dir oid=%c interval=%u count=%u add=%u");
+    "fpga_set_next_step_dir oid=%c dir=%c");
 
 void
 command_fpga_reset_step_clock(uint32_t *args)
@@ -534,12 +551,12 @@ command_fpga_stepper_get_pos(uint32_t *args)
     fpga_send(s->fpga, &cmd_stepper_get_pos, s->channel);
 }
 DECL_COMMAND(command_fpga_stepper_get_pos,
-    "fpga_stepper_get_pos oid=%c");
+    "fpga_stepper_get_position oid=%c");
 
 static void
 rsp_stepper_get_pos(fpga_t *f, uint32_t *args)
 {
-    sendf("fpga_stepper_pos oid=%c position=%u", f->last_oid, args[0]);
+    sendf("fpga_stepper_position oid=%c pos=%i", f->last_oid, args[0]);
 }
 
 typedef struct {
@@ -606,10 +623,10 @@ command_fpga_set_digital_out(uint32_t *args)
 {
     fpga_t *f = fid_lookup(args[0]);
 
-    fpga_send(f, &cmd_set_digital_out, args[0], args[1]);
+    fpga_send(f, &cmd_set_digital_out, args[1], args[2]);
 }
 DECL_COMMAND(command_fpga_set_digital_out,
-    "fpga_set_digital_out fid=%c channel=%c pin_value=%c");
+    "fpga_set_digital_out fid=%c channel=%c value=%c");
 
 typedef struct {
     fpga_t  *fpga;
@@ -618,8 +635,8 @@ typedef struct {
 void
 command_fpga_config_digital_out(uint32_t *args)
 {
-    fpga_t *f = fid_lookup(args[1]);
-    fpga_digital_out_t *d = oid_alloc(args[0], command_fpga_config_digital_out,
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_digital_out_t *d = oid_alloc(args[1], command_fpga_config_digital_out,
         sizeof(*d));
 
     d->fpga = f;
@@ -628,7 +645,7 @@ command_fpga_config_digital_out(uint32_t *args)
     fpga_send(f, &cmd_config_digital_out, args[2], args[3], args[4], args[5]);
 }
 DECL_COMMAND(command_fpga_config_digital_out,
-    "fpga_config_digital_out oid=%c fpga_fid=%c channel=%c value=%c "
+    "fpga_config_digital_out fid=%c oid=%c channel=%c value=%c "
     "default_value=%c max_duration=%u");
 
 void
@@ -702,7 +719,7 @@ f_writebuf(fpga_t *f, uint8_t ix, uint8_t val)
 }
 
 static void
-f_encodeint(fpga_t *f, uint32_t v, uint8_t *p)
+f_encodeint(fpga_t *f, uint32_t v, uint16_t *p)
 {
     int32_t sv = v;
     if (sv < (3L<<5)  && sv >= -(1L<<5))  goto f4;
@@ -723,8 +740,8 @@ fpga_send(fpga_t *f, fpga_cmd_t *fc, ...)
 {
     va_list args;
     va_start(args, fc);
-    uint8_t left;
-    uint8_t ptr;
+    uint16_t left;
+    uint16_t ptr;
     uint16_t crc = 0xffff;
     int i;
 
@@ -763,7 +780,7 @@ f_readbuf(fpga_t *f, uint8_t ix)
 }
 
 static uint32_t
-f_parseint(fpga_t *f, uint8_t *ptr)
+f_parseint(fpga_t *f, uint16_t *ptr)
 {
     uint8_t c = f_readbuf(f, (*ptr)++);
     uint32_t v = c & 0x7f;
@@ -793,9 +810,9 @@ fpga_serial_task(void)
         if (f == NULL)
             continue;
 
-        uint8_t rcvd;
-        uint8_t l;
-        uint8_t ptr;
+        uint16_t rcvd;
+        uint16_t l;
+        uint16_t ptr;
         uint8_t nargs;
         uint32_t rspid;
         uint32_t args[RSP_MAX_ARGS];

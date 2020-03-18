@@ -77,7 +77,11 @@ static void inline
 USARTx_IRQHandler(int n)
 {
     uint32_t sr = usarts[n]->ISR;
-    if (sr & (USART_ISR_RXNE | USART_ISR_ORE))
+    if (sr & USART_ISR_ORE) {
+        usarts[n]->ICR = USART_ICR_ORECF;
+        shutdown("rx overrun");
+    }
+    if (sr & USART_ISR_RXNE)
         rxfuncs[n](ctxs[n], usarts[n]->RDR);
     if (sr & USART_ISR_TXE && usarts[n]->CR1 & USART_CR1_TXEIE) {
         uint8_t data;
