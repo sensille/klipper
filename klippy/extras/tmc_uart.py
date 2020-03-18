@@ -177,8 +177,15 @@ def lookup_tmc_uart_bitbang(config, max_addr):
     addr = config.getint('uart_address', 0, minval=0, maxval=max_addr)
     mcu_uart = rx_pin_params.get('class')
     if mcu_uart is None:
-        mcu_uart = MCU_TMC_uart_bitbang(rx_pin_params, tx_pin_params,
-                                        select_pins_desc)
+        # if cpu offers tmc_uart support, prefer that
+        print('rx_pin_params', rx_pin_params)
+        mcu = rx_pin_params['chip']
+        if getattr(mcu, 'tmc_uart', None):
+            mcu_uart = mcu.tmc_uart(rx_pin_params, tx_pin_params,
+                                        select_pins_desc, addr)
+        else:
+            mcu_uart = MCU_TMC_uart_bitbang(rx_pin_params, tx_pin_params,
+                                            select_pins_desc)
         rx_pin_params['class'] = mcu_uart
     instance_id = mcu_uart.register_instance(rx_pin_params, tx_pin_params,
                                              select_pins_desc, addr)
