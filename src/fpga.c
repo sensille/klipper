@@ -13,6 +13,7 @@
 #include "sched.h" // DECL_SHUTDOWN
 #include "generic/serial_irq.h"
 #include "generic/timer_irq.h" // enable_timesync_out
+#include "generic/io.h" // readw
 #include "board/misc.h" // timer_read_time
 
 #if CONFIG_MACH_STM32F0
@@ -508,13 +509,6 @@ command_fpga_queue_step(uint32_t *args)
 {
     fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
 
-    /*
-     * the hardware needs at least 4 clocks between segments. We just check
-     * for interval here. To be more precise we could calculate the total
-     * runtime from all parameters
-     */
-    if (args[1] < 4)
-        shutdown("minimal interval for queue_step is 4");
     fpga_send(s->fpga, &cmd_queue_step, s->channel, args[1], args[2], args[3]);
 }
 DECL_COMMAND(command_fpga_queue_step,
@@ -568,29 +562,31 @@ typedef struct {
 void
 command_fpga_config_endstop(uint32_t *args)
 {
-    fpga_t *f = fid_lookup(args[1]);
-    fpga_endstop_t *e = oid_alloc(args[0], command_fpga_config_endstop,
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_endstop_t *e = oid_alloc(args[1], command_fpga_config_endstop,
         sizeof(*e));
 
     e->fpga = f;
     e->channel = args[2];
+    /* ignore pull_up and stepper_count */
 }
 DECL_COMMAND(command_fpga_config_endstop,
-    "fpga_config_endstop oid=%c fpga_fid=%c channel=%c");
+    "fpga_config_endstop fid=%c oid=%c channel=%c pull_up=%c stepper_count=%c");
 
 void
 command_fpga_endstop_set_stepper(uint32_t *args)
 {
     fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
-    fpga_stepper_t *s = oid_lookup(args[1], command_fpga_config_stepper);
+    fpga_stepper_t *s = oid_lookup(args[2], command_fpga_config_stepper);
 
+    /* ignore pos */
     fpga_send(e->fpga, &cmd_endstop_set_stepper, e->channel, s->channel);
 }
 DECL_COMMAND(command_fpga_endstop_set_stepper,
-    "fpga_endstop_set_stepper oid=%c stepper_oid=%c");
+    "fpga_endstop_set_stepper oid=%c pos=%c stepper_oid=%c");
 
 void
-command_fpga_endstop_query(uint32_t *args)
+command_fpga_endstop_query_state(uint32_t *args)
 {
     fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
 
@@ -598,7 +594,8 @@ command_fpga_endstop_query(uint32_t *args)
 
     fpga_send(e->fpga, &cmd_endstop_query, e->channel);
 }
-DECL_COMMAND(command_fpga_endstop_query, "fpga_endstop_query oid=%c");
+DECL_COMMAND(command_fpga_endstop_query_state,
+    "fpga_endstop_query_state oid=%c");
 
 static void
 rsp_endstop_state(fpga_t *f, uint32_t *args)
@@ -612,11 +609,12 @@ command_fpga_endstop_home(uint32_t *args)
 {
     fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
 
-    fpga_send(e->fpga, &cmd_endstop_home, e->channel, args[1], args[2],
-        args[3]);
+    fpga_send(e->fpga, &cmd_endstop_home, e->channel, args[1],
+        args[2] * args[3], args[5]);
 }
 DECL_COMMAND(command_fpga_endstop_home,
-    "fpga_endstop_home oid=%c clock=%u sample_count=%c pin_value=%c");
+    "fpga_endstop_home oid=%c clock=%u sample_ticks=%u sample_count=%c rest_ticks=%u pin_value=%c");
+
 
 void
 command_fpga_set_digital_out(uint32_t *args)
@@ -745,13 +743,18 @@ fpga_send(fpga_t *f, fpga_cmd_t *fc, ...)
     uint16_t crc = 0xffff;
     int i;
 
-    if (f->tx_tail > f->tx_head)
-        left = f->tx_tail - f->tx_head;
+again:;
+    uint16_t tail = readw(&f->tx_tail);
+    uint16_t head = readw(&f->tx_head);
+    if (tail > head)
+        left = tail - head;
     else
-        left = f->tx_tail - f->tx_head + F_BUFSZ;
+        left = tail - head + F_BUFSZ;
 
-    if (fc->nparams * 5 + 6 > left)
-        shutdown("fpga send buffer overrun");
+    if (fc->nparams * 5 + 6 > left) {
+        /* not enough room, wait */
+        goto again;
+    }
 
     ptr = 2;
     f_encodeint(f, fc->msg_id, &ptr);

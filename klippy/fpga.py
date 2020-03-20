@@ -1,6 +1,5 @@
 # Interface to FPGA behind micro-controller
 #
-# Copyright (C) 2016-2020  Kevin O'Connor <kevin@koconnor.net>
 # Copyright (C) 2020  Arne Jansen <arne@die-jansens.de>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -44,7 +43,9 @@ class FPGA_tmc_uart:
             raise "XXX move addressing to each command"
         rsp = self.tmcuart_read_cmd.send([self.oid, reg])
         if rsp['status'] != 0:
-            raise "XXX runtime error"
+            raise self._mcu.get_printer().config_error(
+                "XXX runtime error: status is %s pin %s" %
+                    (rsp['status'], self.rx_pin))
         return rsp['data']
     def reg_write(self, instance_id, addr, reg, val, print_time=None):
         if addr != self.addr:
@@ -87,6 +88,11 @@ class FPGA:
         'set_next_step_dir': (False, ()),
         'stepper_get_position': (False, ()),
         'stepper_position': (False, ()),
+        'config_endstop': (True, ((2, 'channel', ('endstop')),)),
+        'endstop_home': (False, ()),
+        'endstop_set_stepper': (False, ()),
+        'endstop_query_state': (False, ()),
+        'endstop_state': (False, ()),
     }
     def __init__(self, config):
         self._printer = printer = config.get_printer()
@@ -209,8 +215,9 @@ class FPGA:
     def get_name(self):
         return self._name
     def register_response(self, cb, msg, oid=None):
-        raise "XXX"
-        self._serial.register_response(cb, msg, oid)
+        print("register ", msg)
+        msg = self._remap_cmd(msg, False)
+        self._mcu.register_response(cb, msg, oid)
     def alloc_command_queue(self):
         return self._mcu.alloc_command_queue()
     def lookup_command(self, msgformat, cq=None):
@@ -267,9 +274,10 @@ class FPGA:
     def microcontroller_restart(self):
         pass
     # Misc external commands
+    def is_fileoutput(self):
+        return self._mcu.is_fileoutput()
     def is_shutdown(self):
-        raise "XXX"
-        return self._is_shutdown
+        return self._mcu.is_shutdown()
     def flush_moves(self, print_time):
         return # XXX
         raise "XXX"

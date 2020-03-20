@@ -75,14 +75,17 @@ class ManualStepper:
         toolhead.note_kinematic_activity(self.next_cmd_time)
         self.sync_print_time()
     def do_homing_move(self, movepos, speed, accel, triggered, check_trigger):
+        print("do_homing_move")
         if not self.can_home:
             raise self.gcode.error("No endstop for this manual stepper")
         # Start endstop checking
         self.sync_print_time()
         endstops = self.rail.get_endstops()
         for mcu_endstop, name in endstops:
+            print("endstop name")
             min_step_dist = min([s.get_step_dist()
                                  for s in mcu_endstop.get_steppers()])
+            print("home_start ", min_step_dist)
             mcu_endstop.home_start(
                 self.next_cmd_time, ENDSTOP_SAMPLE_TIME, ENDSTOP_SAMPLE_COUNT,
                 min_step_dist / speed, triggered=triggered)
