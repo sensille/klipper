@@ -6,11 +6,12 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging, os, ast
-import hd44780, st7920, uc1701, menu
+import hd44780, st7920, uc1701, none, menu
 
 LCD_chips = {
     'st7920': st7920.ST7920, 'hd44780': hd44780.HD44780,
     'uc1701': uc1701.UC1701, 'ssd1306': uc1701.SSD1306, 'sh1106': uc1701.SH1106,
+    'none': none.none,
 }
 
 # Storage of [display_template my_template] config sections
