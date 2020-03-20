@@ -91,6 +91,7 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define CMD_CONFIG_DIGITAL_OUT  16
 #define CMD_SCHEDULE_DIGITAL_OUT 17
 #define CMD_UPDATE_DIGITAL_OUT  18
+#define CMD_SHUTDOWN            19
 
 #define RSP_GET_VERSION         0
 #define RSP_GET_TIME            1
@@ -117,6 +118,7 @@ fpga_cmd_t cmd_set_digital_out = { CMD_SET_DIGITAL_OUT, 2 };
 fpga_cmd_t cmd_config_digital_out = { CMD_CONFIG_DIGITAL_OUT, 4 };
 fpga_cmd_t cmd_schedule_digital_out = { CMD_SCHEDULE_DIGITAL_OUT, 3 };
 fpga_cmd_t cmd_update_digital_out = { CMD_UPDATE_DIGITAL_OUT, 2 };
+fpga_cmd_t cmd_shutdown = { CMD_SHUTDOWN, 0 };
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -887,6 +889,16 @@ fpga_task(void)
 
 DECL_TASK(fpga_task);
 
-#if 0
-DECL_SHUTDOWN(spidev_shutdown);
-#endif
+void
+fpga_shutdown(void)
+{
+    fpga_t *f;
+    int n;
+
+    for (n = 0; n < MAX_FPGA; ++n) {
+        f = fpgas[n];
+        if (f != NULL)
+            fpga_send(f, &cmd_shutdown);
+    }
+}
+DECL_SHUTDOWN(fpga_shutdown);

@@ -6,12 +6,13 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
-import hd44780, st7920, uc1701
+import hd44780, st7920, uc1701, none
 import menu
 
 LCD_chips = {
     'st7920': st7920.ST7920, 'hd44780': hd44780.HD44780,
     'uc1701': uc1701.UC1701, 'ssd1306': uc1701.SSD1306, 'sh1106': uc1701.SH1106,
+    'none': none.none,
 }
 M73_TIMEOUT = 5.
 
