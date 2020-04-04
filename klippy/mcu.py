@@ -334,7 +334,7 @@ class RetryAsyncCommand:
                 self.serial.register_response(None, self.name, self.oid)
                 return params
             query_time = self.reactor.monotonic()
-            if query_time > first_query_time + self._timeout_time:
+            if query_time > first_query_time + self._timeout:
                 self.serial.register_response(None, self.name, self.oid)
                 raise error("Timeout on wait for '%s' response" % (self.name,))
             self.serial.raw_send(cmd, minclock, minclock, cmd_queue)
