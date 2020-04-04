@@ -52,21 +52,8 @@ class FPGA_tmc_uart:
             raise "XXX move addressing to each command"
         minclock = 0
         if print_time is not None:
-            minclock = self.mcu.print_time_to_clock(print_time)
+            minclock = self._mcu.print_time_to_clock(print_time)
         self.tmcuart_write_cmd.send([self.oid, reg, val], minclock=minclock)
-
-
-# Wrapper around command sending
-class CommandWrapper:
-    def __init__(self, fpga, mcu, msgformat, cmd_queue=None):
-        self._serial = serial
-        self._cmd = serial.get_msgparser().lookup_command(msgformat)
-        if cmd_queue is None:
-            cmd_queue = serial.get_default_command_queue()
-        self._cmd_queue = cmd_queue
-    def send(self, data=(), minclock=0, reqclock=0):
-        cmd = self._cmd.encode(data)
-        self._serial.raw_send(cmd, minclock, reqclock, self._cmd_queue)
 
 class FPGA:
     _cmds_with_fid = ('config_digital_out')
@@ -202,8 +189,6 @@ class FPGA:
     def get_query_slot(self, oid):
         return self._mcu.get_query_slot(oid)
     def register_stepqueue(self, stepqueue):
-        # XXX stepqueue
-        #self._stepqueues.append(stepqueue)
         self._mcu.register_stepqueue(stepqueue)
     def seconds_to_clock(self, time):
         return self._mcu.seconds_to_clock(time)
@@ -215,23 +200,20 @@ class FPGA:
     def get_name(self):
         return self._name
     def register_response(self, cb, msg, oid=None):
-        print("register ", msg)
         msg = self._remap_cmd(msg, False)
         self._mcu.register_response(cb, msg, oid)
     def alloc_command_queue(self):
         return self._mcu.alloc_command_queue()
     def lookup_command(self, msgformat, cq=None):
-        print("lookup ", msgformat)
         msgformat = self._remap_cmd(msgformat, False)
-        return self._mcu.lookup_command(msgformat, cq)
-        #return mcu.CommandWrapper(self._serial, msgformat, cq)
+        return self._mcu.lookup_command(msgformat, cq=cq)
     def lookup_query_command(self, msgformat, respformat, oid=None,
                              cq=None, async=False):
-        print("lookup query/rsp", msgformat, respformat)
         msgformat = self._remap_cmd(msgformat, False)
         respformat = self._remap_cmd(respformat, False)
-        return self._mcu.lookup_query_command(msgformat, respformat, oid,
-                                              cq, async)
+        # all queries to fpga are async
+        return self._mcu.lookup_query_command(msgformat, respformat, oid=oid,
+                                              cq=cq, async=True)
     def try_lookup_command(self, msgformat):
         try:
             return self.lookup_command(msgformat)
@@ -240,32 +222,19 @@ class FPGA:
     def lookup_command_id(self, msgformat):
         msgformat = self._remap_cmd(msgformat, False)
         return self._mcu.lookup_command_id(msgformat)
-    def get_enumerations(self):
-        raise "XXX"
-        return self._serial.get_msgparser().get_enumerations()
-    def get_constants(self):
-        raise "XXX"
-        return self._serial.get_msgparser().get_constants()
-    def get_constant_float(self, name):
-        raise "XXX"
-        return self._serial.get_msgparser().get_constant_float(name)
     def print_time_to_clock(self, print_time):
         return self._mcu.print_time_to_clock(print_time)
     def clock_to_print_time(self, clock):
-        return self._clocksync.clock_to_print_time(clock)
+        return self._mcu.clock_to_print_time(clock)
     def estimated_print_time(self, eventtime):
         return self._mcu.estimated_print_time(eventtime)
     def get_adjusted_freq(self):
         return self._mcu.get_adjusted_freq()
     def clock32_to_clock64(self, clock32):
-        raise "XXX"
-        return self._clocksync.clock32_to_clock64(clock32)
+        return self._mcu.clock32_to_clock64(clock32)
     # Restarts
     def _disconnect(self):
-        self._serial.disconnect()
-        if self._steppersync is not None:
-            self._ffi_lib.steppersync_free(self._steppersync)
-            self._steppersync = None
+        pass
     def _shutdown(self, force=False):
         if (self._emergency_stop_cmd is None
             or (self._is_shutdown and not force)):
@@ -279,32 +248,9 @@ class FPGA:
     def is_shutdown(self):
         return self._mcu.is_shutdown()
     def flush_moves(self, print_time):
-        return # XXX
-        raise "XXX"
-        if self._steppersync is None:
-            return
-        clock = self.print_time_to_clock(print_time)
-        if clock < 0:
-            return
-        ret = self._ffi_lib.steppersync_flush(self._steppersync, clock)
-        if ret:
-            raise error("Internal error in FPGA '%s' stepcompress" % (
-                self._name,))
+        return self._mcu.flush_moves(print_time)
     def check_active(self, print_time, eventtime):
         return self._mcu.check_active(print_time, eventtime)
-        raise "XXX"
-        if self._steppersync is None:
-            return
-        offset, freq = self._clocksync.calibrate_clock(print_time, eventtime)
-        self._ffi_lib.steppersync_set_time(self._steppersync, offset, freq)
-        if (self._clocksync.is_active() or self.is_fileoutput()
-            or self._is_timeout):
-            return
-        self._is_timeout = True
-        logging.info("Timeout with FPGA '%s' (eventtime=%f)",
-                     self._name, eventtime)
-        self._printer.invoke_shutdown("Lost communication with FPGA '%s'" % (
-            self._name,))
     def __del__(self):
         self._disconnect()
     def add_config_digital_out(self, oid, pin, value, default_value,
@@ -320,10 +266,8 @@ class FPGA:
         return FPGA_tmc_uart(rx_pin_params, tx_pin_params, select_pins_desc,
                              addr)
     def _remap_cmd(self, cmd, map_values):
-        print("cmd is ", cmd)
         parts = cmd.split()
         (need_fid, remap) = self._cmdmap[parts[0]]
-        print(remap)
         if map is None:
             return cmd
         for (index, new_name, classes) in remap:
@@ -340,7 +284,7 @@ class FPGA:
             parts.insert(1, "fid=%d" % (self._fid))
         return "fpga_" + ' '.join(parts)
     def _resolve_pin(self, pin):
-        match = re.match('^(\w+)(\d+)', pin)
+        match = re.match('^([a-zA-Z]+)(\d+)$', pin)
         if not match:
                 raise self._printer.config_error(
                     "malformed pin name %s" % (pin))
