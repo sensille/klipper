@@ -29,7 +29,6 @@ static struct task_wake fpga_config_wake;
 static struct task_wake fpga_serial_wake;
 typedef struct fpga_s {
     uint8_t         fid;
-    uint8_t         last_oid;   /* cache for responses */
     struct gpio_out clk;
     struct gpio_in miso;
     struct gpio_out mosi;
@@ -52,6 +51,7 @@ typedef struct fpga_s {
     uint16_t         tx_tail;
     uint8_t         tx_buf[F_BUFSZ];
     uint8_t         tx_seq;
+    uint8_t         disable_receive;
 } fpga_t;
 
 typedef struct {
@@ -142,11 +142,17 @@ command_config_fpga(uint32_t *args)
 
     if (fid >= MAX_FPGA)
         shutdown("fid out of range");
-    if (fpgas[fid] != NULL)
-        shutdown("fid already allocated");
 
-    f = alloc_chunk(sizeof(*f));
-    fpgas[fid] = f;
+    f = fpgas[fid];
+    if (f) {
+        // re-configure might trigger receipt of some 0-bytes
+        memset(f, 0, sizeof(*f));
+        f->disable_receive = 1;
+    } else {
+        f = alloc_chunk(sizeof(*f));
+        fpgas[fid] = f;
+    }
+    /* TODO possibly compare current config with new one, shutdown if differ */
 
     f->fid = fid;
     /* spi to flash */
@@ -169,34 +175,6 @@ command_config_fpga(uint32_t *args)
 DECL_COMMAND(command_config_fpga,
              "config_fpga fid=%c clk_pin=%u miso_pin=%u mosi_pin=%u cs_pin=%u "
              "program_pin=%u init_pin=%u done_pin=%u di_pin=%u");
-
-void
-command_config_fpga_noinit(uint32_t *args)
-{
-    uint8_t fid = args[0];
-    fpga_t *f;
-
-    if (fid >= MAX_FPGA)
-        shutdown("fid out of range");
-    if (fpgas[fid] != NULL)
-        shutdown("fid already allocated");
-
-    f = alloc_chunk(sizeof(*f));
-    fpgas[fid] = f;
-
-    f->fid = fid;
-    /* slave serial to fpga */
-    f->program = gpio_out_setup(args[1], 1);
-    f->done = gpio_in_setup(args[2], 1);
-
-    // just check fpga is really in user mode
-    if (!gpio_in_read(f->done))
-        shutdown("fpga not ready (done not set)");
-
-    f->state = FS_INITIALIZED;
-}
-DECL_COMMAND(command_config_fpga_noinit,
-             "config_fpga_noinit fid=%c program_pin=%u done_pin=%u");
 
 void
 fpga_config_task(void)
@@ -283,6 +261,7 @@ fpga_config_task(void)
             if (++f->cnt >= 16384)
                 shutdown("fpga config error (done not set)");
         } else if (f->state == FS_SEND_RESPONSE) {
+            f->disable_receive = 0;
             sendf("fpga_init_done fid=%c", f->fid);
             f->state = FS_INITIALIZED;
         }
@@ -401,8 +380,19 @@ rsp_get_uptime(fpga_t *f, uint32_t *args)
 typedef struct {
     fpga_t  *fpga;
     uint8_t channel;
+    uint32_t cycle_ticks;
 } fpga_pwm_t;
 
+// We need to map the given values to the hardware behaviour:
+//
+// on_ticks >= cycle_ticks: all 1
+// on_ticks == cycle_ticks - 1: 1 tick 1, cycle_ticks - 1 ticks 0
+// on_ticks == cycle_ticks - 2: 2 ticks 1, cycle_ticks - 2 ticks 0
+// on_ticks == 2: 2 ticks 0
+// on_ticks == 1: 1 tick 0
+// on_ticks == 0: all 0
+// default 0: -> always 0
+// default 1: -> always 1
 void
 command_fpga_config_pwm(uint32_t *args)
 {
@@ -411,6 +401,7 @@ command_fpga_config_pwm(uint32_t *args)
 
     p->fpga = f;
     p->channel = args[2];
+    p->cycle_ticks = args[3];
 
     /* given value is either 0 or 1. map to pwm range */
     fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4] ? args[3] : 0,
@@ -423,8 +414,14 @@ void
 command_fpga_schedule_pwm(uint32_t *args)
 {
     fpga_pwm_t *p = oid_lookup(args[0], command_fpga_config_pwm);
+    uint32_t on_ticks;
 
-    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], args[2]);
+    if (args[2] > 0 && args[2] < p->cycle_ticks)
+        on_ticks = p->cycle_ticks - args[2];
+    else
+        on_ticks = args[2];
+
+    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], on_ticks);
 }
 DECL_COMMAND(command_fpga_schedule_pwm,
     "fpga_schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u");
@@ -454,8 +451,6 @@ command_fpga_tmcuart_read(uint32_t *args)
 {
     fpga_tmcuart_t *t = oid_lookup(args[0], command_fpga_config_tmcuart);
 
-    t->fpga->last_oid = args[0];
-
     fpga_send(t->fpga, &cmd_tmcuart_read, t->channel, t->slave, args[1]);
 }
 DECL_COMMAND(command_fpga_tmcuart_read, "fpga_tmcuart_read oid=%c register=%c");
@@ -463,8 +458,17 @@ DECL_COMMAND(command_fpga_tmcuart_read, "fpga_tmcuart_read oid=%c register=%c");
 static void
 rsp_tmcuart_read(fpga_t *f, uint32_t *args)
 {
-    sendf("fpga_tmcuart_data oid=%c status=%c data=%u", f->last_oid,
-        args[0], args[1]);
+    uint8_t oid;
+    fpga_tmcuart_t *t;
+
+    foreach_oid(oid, t, command_fpga_config_tmcuart)
+        if (t->channel == args[0])
+            break;
+
+    if (t == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_tmcuart_data oid=%c status=%c data=%u", oid, args[1], args[2]);
 }
 
 void
@@ -542,8 +546,6 @@ command_fpga_stepper_get_pos(uint32_t *args)
 {
     fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
 
-    s->fpga->last_oid = args[0];
-
     fpga_send(s->fpga, &cmd_stepper_get_pos, s->channel);
 }
 DECL_COMMAND(command_fpga_stepper_get_pos,
@@ -552,7 +554,17 @@ DECL_COMMAND(command_fpga_stepper_get_pos,
 static void
 rsp_stepper_get_pos(fpga_t *f, uint32_t *args)
 {
-    sendf("fpga_stepper_position oid=%c pos=%i", f->last_oid, args[0]);
+    uint8_t oid;
+    fpga_stepper_t *s;
+
+    foreach_oid(oid, s, command_fpga_config_stepper)
+        if (s->channel == args[0])
+            break;
+
+    if (s == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_stepper_position oid=%c pos=%i", oid, args[1]);
 }
 
 typedef struct {
@@ -592,8 +604,6 @@ command_fpga_endstop_query_state(uint32_t *args)
 {
     fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
 
-    e->fpga->last_oid = args[0];
-
     fpga_send(e->fpga, &cmd_endstop_query, e->channel);
 }
 DECL_COMMAND(command_fpga_endstop_query_state,
@@ -602,14 +612,26 @@ DECL_COMMAND(command_fpga_endstop_query_state,
 static void
 rsp_endstop_state(fpga_t *f, uint32_t *args)
 {
-    sendf("fpga_endstop_state oid=%c homing=%c pin_value=%c", f->last_oid,
-        args[0], args[1]);
+    uint8_t oid;
+    fpga_endstop_t *e;
+
+    foreach_oid(oid, e, command_fpga_config_endstop)
+        if (e->channel == args[0])
+            break;
+
+    if (e == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_endstop_state oid=%c homing=%c pin_value=%c", oid,
+        args[1], args[2]);
 }
 
 void
 command_fpga_endstop_home(uint32_t *args)
 {
     fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
+
+    output("endstop %c home clock %u", e->channel, args[1]);
 
     fpga_send(e->fpga, &cmd_endstop_home, e->channel, args[1],
         args[2] * args[3], args[5]);
@@ -670,15 +692,31 @@ command_fpga_update_digital_out(uint32_t *args)
 DECL_COMMAND(command_fpga_update_digital_out,
     "fpga_update_digital_out oid=%c value=%c");
 
+static void
+rsp_shutdown(fpga_t *f, uint32_t *args)
+{
+    if (args[0] & 1)
+        shutdown("fpga step time in the past");
+    else if (args[0] & 2)
+        shutdown("fpga endstop time in the past");
+    else if (args[0] & 4)
+        shutdown("fpga pwm time in the past");
+    else if (args[0] & 8)
+        shutdown("fpga digital_out time in the past");
+    else
+        shutdown("fpga unknown reason");
+}
+
 struct response_handler_s {
     uint8_t nargs;
     void (*func)(fpga_t *, uint32_t *);
 } response_handlers[] = {
     { 3, rsp_get_version },
     { 2, rsp_get_uptime },
-    { 1, rsp_stepper_get_pos },
-    { 2, rsp_endstop_state },
-    { 2, rsp_tmcuart_read },
+    { 2, rsp_stepper_get_pos },
+    { 3, rsp_endstop_state },
+    { 3, rsp_tmcuart_read },
+    { 1, rsp_shutdown },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))
@@ -828,14 +866,24 @@ fpga_serial_task(void)
         else
             rcvd = f->rx_head - f->rx_tail + F_BUFSZ;
 
+        if (f->disable_receive) {
+            /* discard bytes */
+            f->rx_tail = F_WRAP(f->rx_tail + rcvd);
+            continue;
+        }
+
         if (rcvd < 1)
             continue;
 
         l = f_readbuf(f, 0);
-        if (l > 32)
+        if (l > 64) {
+            output("frame from fpga too large: %c", l);
             shutdown("bad frame from fpga received (oversized)");
-        if (l < 6)
+        }
+        if (l < 6) {
+            output("frame from fpga too short: %c", l);
             shutdown("bad frame from fpga received (undersized)");
+        }
         if (rcvd < l)
             continue;
 
