@@ -569,6 +569,37 @@ rsp_stepper_get_pos(fpga_t *f, uint32_t *args)
     sendf("fpga_stepper_position oid=%c pos=%i", oid, args[1]);
 }
 
+void
+command_fpga_stepper_get_next(uint32_t *args)
+{
+    fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
+
+    fpga_send(s->fpga, &cmd_stepper_get_next, s->channel);
+}
+DECL_COMMAND(command_fpga_stepper_get_next,
+    "fpga_stepper_get_next_step oid=%c");
+
+static void
+rsp_stepper_get_next(fpga_t *f, uint32_t *args)
+{
+    uint8_t oid;
+    fpga_stepper_t *s;
+
+    foreach_oid(oid, s, command_fpga_config_stepper)
+        if (s->channel == args[0])
+            break;
+
+    if (s == NULL)
+        shutdown("bad channel received");
+
+#ifdef CLOCK_DEBUG
+    output("fpga stepper=%u next_step_clock=%u q=%u now=%u", args[0], args[1],
+        args[2], args[3]);
+    if (f->send_anyway)
+#endif
+    sendf("fpga_stepper_next_step oid=%c clock=%u", oid, args[1]);
+}
+
 typedef struct {
     fpga_t          *fpga;
     fpga_stepper_t  *stepper;
@@ -718,7 +749,8 @@ struct response_handler_s {
     { 2, rsp_stepper_get_pos },
     { 3, rsp_endstop_state },
     { 3, rsp_tmcuart_read },
-    { 1, rsp_shutdown },
+    { 2, rsp_shutdown },
+    { 4, rsp_stepper_get_next },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))
