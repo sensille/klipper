@@ -396,8 +396,8 @@ struct serialqueue {
 #define MIN_BACKGROUND_DELTA 0.005
 #define IDLE_QUERY_TIME 1.0
 
-#define DEBUG_QUEUE_SENT 1000
-#define DEBUG_QUEUE_RECEIVE 1000
+#define DEBUG_QUEUE_SENT 10000
+#define DEBUG_QUEUE_RECEIVE 10000
 
 // Create a series of empty messages and add them to a list
 static void

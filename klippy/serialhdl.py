@@ -194,8 +194,8 @@ class SerialReader:
         out = []
         out.append("Dumping serial stats: %s" % (
             self.stats(self.reactor.monotonic()),))
-        sdata = self.ffi_main.new('struct pull_queue_message[1024]')
-        rdata = self.ffi_main.new('struct pull_queue_message[1024]')
+        sdata = self.ffi_main.new('struct pull_queue_message[10240]')
+        rdata = self.ffi_main.new('struct pull_queue_message[10240]')
         scount = self.ffi_lib.serialqueue_extract_old(self.serialqueue, 1,
                                                       sdata, len(sdata))
         rcount = self.ffi_lib.serialqueue_extract_old(self.serialqueue, 0,
