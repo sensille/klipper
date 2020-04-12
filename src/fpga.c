@@ -429,7 +429,7 @@ command_fpga_config_pwm(uint32_t *args)
 
     /* given value is either 0 or 1. map to pwm range */
     fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4] ? args[3] : 0,
-              args[5], args[6]);
+              !!args[5], args[6]);
 }
 DECL_COMMAND(command_fpga_config_pwm, "fpga_config_soft_pwm_out fid=%c oid=%c "
     "channel=%c cycle_ticks=%u value=%c default_value=%c max_duration=%u");
