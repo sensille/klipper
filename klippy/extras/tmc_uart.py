@@ -178,7 +178,6 @@ def lookup_tmc_uart_bitbang(config, max_addr):
     mcu_uart = rx_pin_params.get('class')
     if mcu_uart is None:
         # if cpu offers tmc_uart support, prefer that
-        print('rx_pin_params', rx_pin_params)
         mcu = rx_pin_params['chip']
         if getattr(mcu, 'tmc_uart', None):
             mcu_uart = mcu.tmc_uart(rx_pin_params, tx_pin_params,
