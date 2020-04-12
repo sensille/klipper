@@ -45,12 +45,12 @@ typedef struct fpga_s {
     uint32_t        cnt;       // number of pages sent or end-timer
     uint32_t        uart;
     uint32_t        version;   // FPGA version identifier
-    uint16_t         rx_head;
-    uint16_t         rx_tail;
+    uint16_t        rx_head;
+    uint16_t        rx_tail;
     uint8_t         rx_buf[F_BUFSZ];
     uint8_t         rx_seq;
-    uint16_t         tx_head;
-    uint16_t         tx_tail;
+    uint16_t        tx_head;
+    uint16_t        tx_tail;
     uint8_t         tx_buf[F_BUFSZ];
     uint8_t         tx_seq;
     uint8_t         disable_receive;
@@ -686,8 +686,6 @@ command_fpga_endstop_home(uint32_t *args)
 {
     fpga_endstop_t *e = oid_lookup(args[0], command_fpga_config_endstop);
 
-    output("endstop %c home clock %u", e->channel, args[1]);
-
     fpga_send(e->fpga, &cmd_endstop_home, e->channel, args[1],
         args[2] * args[3], args[5]);
 }
@@ -750,6 +748,7 @@ DECL_COMMAND(command_fpga_update_digital_out,
 static void
 rsp_shutdown(fpga_t *f, uint32_t *args)
 {
+    output("fpga_shutdown at %u reason %u", args[1], args[0]);
     if (args[0] & 1)
         shutdown("fpga step time in the past");
     else if (args[0] & 2)
@@ -758,6 +757,10 @@ rsp_shutdown(fpga_t *f, uint32_t *args)
         shutdown("fpga pwm time in the past");
     else if (args[0] & 8)
         shutdown("fpga digital_out time in the past");
+    else if (args[0] & 16)
+        shutdown("triggered by e-step idle");
+    else if (args[0] & 32)
+        shutdown("fpga step queue overflow");
     else
         shutdown("fpga unknown reason");
 }
