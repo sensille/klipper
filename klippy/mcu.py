@@ -580,7 +580,7 @@ class MCU:
             # Already configured - send init commands
             self._send_config(config_params['crc'])
         # Setup steppersync with the move_count returned by get_config
-        move_count = config_params['move_count']
+        self.move_count = move_count = config_params['move_count']
         self._steppersync = self._ffi_lib.steppersync_alloc(
             self._serial.serialqueue, self._stepqueues, len(self._stepqueues),
             move_count)

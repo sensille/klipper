@@ -131,16 +131,13 @@ class FPGA:
                 ["%s=%s" % (k, v) for k, v in self._config.items()]))]
         return "\n".join(log_info)
     def _connect(self):
-        # Setup steppersync with the move_count returned by get_config
-        move_count = self._config['move_cnt']
-        #self._steppersync = self._ffi_lib.steppersync_alloc(
-        #    self._serial.serialqueue, self._stepqueues, len(self._stepqueues),
-        #    move_count)
-        #self._ffi_lib.steppersync_set_time(
-        #    self._steppersync, 0., self._mcu_freq)
-        # Log config information
-        move_msg = "Configured FPGA '%s' (%d moves)" % (self._name, move_count)
-        logging.info(move_msg)
+        # just make sure the move queue of the fpga is at least as long as
+        # that of the mcu
+        mcu_move_count = self._mcu.move_count
+        fpga_move_count = self._config['move_cnt']
+        if fpga_move_count < mcu_move_count:
+            raise self._mcu.get_printer().config_error(
+                "FPGA move queue is smaller than that of MCU, this won't work")
     def _mcu_identify(self):
         # our mcu is already identified. Configure fpga here and get version
         mcu = self._mcu
