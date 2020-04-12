@@ -21,7 +21,7 @@
 #endif
 
 #define MAX_FPGA 8
-#define F_BUFSZ 256
+#define F_BUFSZ 512
 #define F_WRAP(p) ((p) & (F_BUFSZ - 1))
 #define F_NEXT(p) F_WRAP((p) + 1)
 
@@ -92,6 +92,7 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define CMD_SCHEDULE_DIGITAL_OUT 17
 #define CMD_UPDATE_DIGITAL_OUT  18
 #define CMD_SHUTDOWN            19
+#define CMD_STEPPER_GET_NEXT    20
 
 #define RSP_GET_VERSION         0
 #define RSP_GET_TIME            1
@@ -109,6 +110,7 @@ fpga_cmd_t cmd_queue_step = { CMD_QUEUE_STEP, 4 };
 fpga_cmd_t cmd_set_next_step_dir = { CMD_SET_NEXT_STEP_DIR, 2 };
 fpga_cmd_t cmd_reset_step_clock = { CMD_RESET_STEP_CLOCK, 2 };
 fpga_cmd_t cmd_stepper_get_pos = { CMD_STEPPER_GET_POS, 1 };
+fpga_cmd_t cmd_stepper_get_next = { CMD_STEPPER_GET_NEXT, 1 };
 fpga_cmd_t cmd_endstop_set_stepper = { CMD_ENDSTOP_SET_STEPPER, 2 };
 fpga_cmd_t cmd_endstop_query = { CMD_ENDSTOP_QUERY, 1 };
 fpga_cmd_t cmd_endstop_home = { CMD_ENDSTOP_HOME, 4 };
