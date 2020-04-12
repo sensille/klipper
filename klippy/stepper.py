@@ -34,6 +34,7 @@ class MCU_stepper:
         self._mcu_position_offset = self._tag_position = 0.
         self._min_stop_interval = 0.
         self._reset_cmd_id = self._get_position_cmd = None
+        self._get_next_step_cmd = None
         self._active_callbacks = []
         ffi_main, self._ffi_lib = chelper.get_ffi()
         self._stepqueue = ffi_main.gc(self._ffi_lib.stepcompress_alloc(oid),
@@ -43,6 +44,10 @@ class MCU_stepper:
         self._itersolve_generate_steps = self._ffi_lib.itersolve_generate_steps
         self._itersolve_check_active = self._ffi_lib.itersolve_check_active
         self._trapq = ffi_main.NULL
+        self.gcode = self._mcu.get_printer().lookup_object("gcode")
+        self.gcode.register_mux_command("DUMP_POS", "STEPPER", name,
+            self.cmd_DUMP_POS, desc=self.cmd_DUMP_POS_help)
+    cmd_DUMP_POS_help = "Display internal step position and next step times"
     def get_mcu(self):
         return self._mcu
     def get_name(self, short=False):
@@ -87,6 +92,12 @@ class MCU_stepper:
         self._get_position_cmd = self._mcu.lookup_query_command(
             "stepper_get_position oid=%c",
             "stepper_position oid=%c pos=%i", oid=self._oid)
+        try:
+            self._get_next_step_cmd = self._mcu.lookup_query_command(
+                "stepper_get_next_step oid=%c",
+                "stepper_next_step oid=%c clock=%u", oid=self._oid)
+        except:
+            pass
         self._ffi_lib.stepcompress_fill(
             self._stepqueue, self._mcu.seconds_to_clock(max_error),
             self._invert_dir, step_cmd_id, dir_cmd_id)
@@ -171,6 +182,14 @@ class MCU_stepper:
     def is_active_axis(self, axis):
         return self._ffi_lib.itersolve_is_active_axis(
             self._stepper_kinematics, axis)
+    def cmd_DUMP_POS(self, params):
+        position = self._get_position_cmd.send([self._oid])
+        next_step_time = 0
+        if self._get_next_step_cmd:
+            next_step = self._get_next_step_cmd.send([self._oid])
+            next_step_time = next_step['clock']
+        self.gcode.respond_info("DUMP_POS: %s pos %d next_step %d" %
+            (self._name, position['pos'], next_step_time))
 
 # Helper code to build a stepper object from a config section
 def PrinterStepper(config, units_in_radians=False):
