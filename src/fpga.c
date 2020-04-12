@@ -509,6 +509,7 @@ DECL_COMMAND(command_fpga_tmcuart_write,
 typedef struct {
     fpga_t  *fpga;
     uint8_t channel;
+    uint32_t step_debt;
 } fpga_stepper_t;
 
 void
@@ -538,8 +539,37 @@ void
 command_fpga_queue_step(uint32_t *args)
 {
     fpga_stepper_t *s = oid_lookup(args[0], command_fpga_config_stepper);
+    uint32_t interval = args[1];
+    uint32_t count = args[2];
+    uint32_t add = args[3];
 
-    fpga_send(s->fpga, &cmd_queue_step, s->channel, args[1], args[2], args[3]);
+    /*
+     * adjust flaky step commands
+     */
+    int min_interval = 16;  /* 8 clk step + 8 clk pause */
+    if (interval < min_interval) {
+        s->step_debt += min_interval - interval;
+        fpga_send(s->fpga, &cmd_queue_step, s->channel, min_interval, 1, 0);
+        count -= 1;
+        interval += add;
+        if (count == 0)
+            return;
+    }
+    if (s->step_debt && interval > min_interval) {
+        uint32_t avail = interval - min_interval;
+        uint32_t corr = avail > s->step_debt ? s->step_debt : avail;
+
+        fpga_send(s->fpga, &cmd_queue_step, s->channel, interval - corr, 1, 0);
+        count -= 1;
+        interval += add;
+        s->step_debt -= corr;
+        if (count == 1)
+            add = 0;    /* cosmetic */
+    }
+    if (count == 0)
+        return;
+
+    fpga_send(s->fpga, &cmd_queue_step, s->channel, interval, count, add);
 }
 DECL_COMMAND(command_fpga_queue_step,
     "fpga_queue_step oid=%c interval=%u count=%hu add=%hi");
