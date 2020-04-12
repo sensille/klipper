@@ -16,6 +16,8 @@
 #include "generic/io.h" // readw
 #include "board/misc.h" // timer_read_time
 
+#undef CLOCK_DEBUG
+
 #if CONFIG_MACH_STM32F0
 #include "stm32/internal.h" // gpio_peripheral
 #endif
@@ -52,6 +54,10 @@ typedef struct fpga_s {
     uint8_t         tx_buf[F_BUFSZ];
     uint8_t         tx_seq;
     uint8_t         disable_receive;
+#ifdef CLOCK_DEBUG
+    struct timer    timer;
+    int             send_anyway;
+#endif
 } fpga_t;
 
 typedef struct {
@@ -319,6 +325,9 @@ DECL_COMMAND(command_fpga_setup,
     "fpga_setup fid=%c usart_bus=%u rate=%u timesync_pin=%u "
     "serr_pin=%u sreset_pin=%u");
 
+#ifdef CLOCK_DEBUG
+static uint_fast8_t fpga_timer(struct timer *timer);
+#endif
 static void
 rsp_get_version(fpga_t *f, uint32_t *args)
 {
@@ -362,6 +371,12 @@ rsp_get_version(fpga_t *f, uint32_t *args)
         a1 & 0xff,         // endstop
         a2 >> 24,          // uart
         a2 & 0xffff);      // move_count
+
+#ifdef CLOCK_DEBUG
+    f->timer.func = fpga_timer;
+    f->timer.waketime = timer_read_time() + CONFIG_CLOCK_FREQ;
+    sched_add_timer(&f->timer);
+#endif
 }
 
 void
@@ -376,6 +391,13 @@ DECL_COMMAND(command_fpga_get_uptime, "fpga_get_uptime fid=%c");
 static void
 rsp_get_uptime(fpga_t *f, uint32_t *args)
 {
+#ifdef CLOCK_DEBUG
+    uint32_t cur, high;
+    read_uptime(&cur, &high);
+    output("fpga_uptime %u/%u mcu %u/%u diff %i", high, cur, args[1], args[0],
+        cur - args[0]);
+    if (f->send_anyway)
+#endif
     sendf("fpga_uptime fid=%c high=%u clock=%u", f->fid, args[1], args[0]);
 }
 
@@ -970,6 +992,51 @@ fpga_task(void)
 }
 
 DECL_TASK(fpga_task);
+
+#ifdef CLOCK_DEBUG
+static struct task_wake fpga_timer_wake;
+static uint_fast8_t
+fpga_timer(struct timer *timer) {
+    fpga_t *f = container_of(timer, fpga_t, timer);
+
+    f->timer.waketime += CONFIG_CLOCK_FREQ / 2;
+
+    sched_wake_task(&fpga_timer_wake);
+
+    return SF_RESCHEDULE;
+}
+
+void
+fpga_timer_task(void)
+{
+    fpga_t *f;
+    uint32_t cur, high;
+    int n;
+
+    if (!sched_check_wake(&fpga_timer_wake))
+        return;
+
+    read_uptime(&cur, &high);
+
+    for (n = 0; n < MAX_FPGA; ++n) {
+        f = fpgas[n];
+        if (f == NULL)
+            continue;
+
+        fpga_send(f, &cmd_get_uptime);
+
+#if 1
+        uint8_t oid;
+        fpga_stepper_t *s;
+        foreach_oid(oid, s, command_fpga_config_stepper)
+            fpga_send(f, &cmd_stepper_get_next, s->channel);
+#else
+            fpga_send(f, &cmd_stepper_get_next, 5);
+#endif
+    }
+}
+DECL_TASK(fpga_timer_task);
+#endif
 
 void
 fpga_shutdown(void)
