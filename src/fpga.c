@@ -158,14 +158,14 @@ command_config_fpga(uint32_t *args)
 
     f = fpgas[fid];
     if (f) {
-        // re-configure might trigger receipt of some 0-bytes
-        memset(f, 0, sizeof(*f));
-        f->disable_receive = 1;
-    } else {
-        f = alloc_chunk(sizeof(*f));
-        fpgas[fid] = f;
-    }
+        // already configured
     /* TODO possibly compare current config with new one, shutdown if differ */
+        sendf("fpga_init_done fid=%c", f->fid);
+        return;
+    }
+
+    f = alloc_chunk(sizeof(*f));
+    fpgas[fid] = f;
 
     f->fid = fid;
     /* spi to flash */
