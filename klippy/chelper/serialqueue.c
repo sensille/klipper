@@ -377,6 +377,7 @@ struct serialqueue {
     struct list_head receive_queue;
     // Debugging
     struct list_head old_sent, old_receive;
+    int debug_fd;
     // Stats
     uint32_t bytes_write, bytes_read, bytes_retransmit, bytes_invalid;
 };
@@ -420,6 +421,33 @@ debug_queue_add(struct list_head *root, struct queue_message *qm)
     message_free(old);
 }
 
+#pragma pack(push)
+#pragma pack(1)
+struct dump_msg {
+    double sent_time;
+    double receive_time;
+    uint8_t type;   // send/receive
+    uint8_t msg_len;
+    uint8_t msg[MESSAGE_MAX];
+};
+#pragma pack(pop)
+
+static void
+debug_dump(struct serialqueue *sq, struct queue_message *qm, int sent)
+{
+    if (sq->debug_fd == -1)
+        return;
+    struct dump_msg msg;
+
+    msg.sent_time = qm->sent_time;
+    msg.receive_time = qm->receive_time;
+    msg.type = sent;
+    msg.msg_len = qm->len;
+    memcpy(msg.msg, qm->msg, qm->len);
+
+    write(sq->debug_fd, &msg, sizeof(msg) - MESSAGE_MAX + qm->len);
+}
+
 // Wake up the receiver thread if it is waiting
 static void
 check_wake_receive(struct serialqueue *sq)
@@ -456,6 +484,7 @@ update_receive_seq(struct serialqueue *sq, double eventtime, uint64_t rseq)
         }
         sq->need_ack_bytes -= sent->len;
         list_del(&sent->node);
+        debug_dump(sq, sent, 1);
         debug_queue_add(&sq->old_sent, sent);
         sent_seq++;
         if (rseq == sent_seq) {
@@ -869,6 +898,7 @@ serialqueue_alloc(int serial_fd, int write_only)
     list_init(&sq->old_receive);
     debug_queue_alloc(&sq->old_sent, DEBUG_QUEUE_SENT);
     debug_queue_alloc(&sq->old_receive, DEBUG_QUEUE_RECEIVE);
+    sq->debug_fd = -1;
 
     // Thread setup
     ret = pthread_mutex_init(&sq->lock, NULL);
@@ -886,6 +916,12 @@ serialqueue_alloc(int serial_fd, int write_only)
 fail:
     report_errno("init", ret);
     return NULL;
+}
+
+void __visible
+serialqueue_set_debug_fd(struct serialqueue *sq, int debug_fd)
+{
+    sq->debug_fd = debug_fd;
 }
 
 // Request that the background thread exit
@@ -1030,10 +1066,12 @@ serialqueue_pull(struct serialqueue *sq, struct pull_queue_message *pqm)
     pqm->sent_time = qm->sent_time;
     pqm->receive_time = qm->receive_time;
     pqm->notify_id = qm->notify_id;
-    if (qm->len)
+    if (qm->len) {
+        debug_dump(sq, qm, 0);
         debug_queue_add(&sq->old_receive, qm);
-    else
+    } else {
         message_free(qm);
+    }
 
     pthread_mutex_unlock(&sq->lock);
     return;
