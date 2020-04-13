@@ -36,6 +36,8 @@ class SerialReader:
         # Sent message notification tracking
         self.last_notify_id = 0
         self.pending_notifications = {}
+    def set_debug_fd(self, debug_fd):
+        self._debug_fd = debug_fd
     def _bg_thread(self):
         response = self.ffi_main.new('struct pull_queue_message *')
         while 1:
@@ -101,6 +103,9 @@ class SerialReader:
             self.serialqueue = self.ffi_main.gc(
                 self.ffi_lib.serialqueue_alloc(self.ser.fileno(), 0),
                 self.ffi_lib.serialqueue_free)
+            if self._debug_fd:
+                self.ffi_lib.serialqueue_set_debug_fd(self.serialqueue,
+                    self._debug_fd)
             self.background_thread = threading.Thread(target=self._bg_thread)
             self.background_thread.start()
             # Obtain and load the data dictionary from the firmware

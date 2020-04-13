@@ -451,6 +451,11 @@ class MCU:
         self._mcu_tick_stddev = 0.
         self._mcu_tick_awake = 0.
         self._fid = 0
+        # Debug
+        dump = config.get('dump', None)
+        if dump is not None:
+            self.dump_file = open(dump, 'w')
+            self._serial.set_debug_fd(self.dump_file.fileno())
         # Register handlers
         printer.register_event_handler("klippy:connect", self._connect)
         printer.register_event_handler("klippy:mcu_identify",
