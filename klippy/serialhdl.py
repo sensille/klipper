@@ -36,6 +36,7 @@ class SerialReader:
         # Sent message notification tracking
         self.last_notify_id = 0
         self.pending_notifications = {}
+        self._debug_fd = None
     def set_debug_fd(self, debug_fd):
         self._debug_fd = debug_fd
     def _bg_thread(self):

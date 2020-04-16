@@ -440,7 +440,7 @@ class MCU:
         # Debug
         dump = config.get('dump', None)
         if dump is not None:
-            self.dump_file = open(dump, 'w')
+            self.dump_file = open(dump, 'a')
             self._serial.set_debug_fd(self.dump_file.fileno())
     def create_fid(self):
         self._fid += 1
