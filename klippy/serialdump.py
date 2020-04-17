@@ -17,8 +17,10 @@ Move = namedtuple('Move',
 
 def find_pos(stepper, clock):
     # find the move whith comprises clock
-#    if clock != 1335904042:
-#        return 0
+    if clock != 1807466085:
+        return 0
+    print(stepper)
+    print("search oid %s for clock %d" % (stepper['oid'], clock))
     q = stepper['queue']
     startmove = None
     for m in reversed(q):
@@ -49,6 +51,7 @@ def find_pos(stepper, clock):
     c2 = -(p / 2.) - math.sqrt(p ** 2 + q)
     print("c1 %f c2 %f" % (c1, c2))
 
+    exit()
     return pos
 
 def process(header, m):
@@ -79,6 +82,7 @@ def process(header, m):
             'next_clock': 0,
             'pos': 0,
             'queue': deque(),
+            'oid': oid
         }
     elif cmd == 'fpga_set_next_step_dir':
         # fpga_set_next_step_dir oid=11 dir=0
@@ -119,11 +123,18 @@ def process(header, m):
         val = (data & ((1 << 20) - 1)) / 1000.
         if sign:
             val = -val
-        annotation = "val %.3f" % (val)
+        annotation = "val %.3f pos ( " % (val)
+        coord = ""
         # find pos from all steppers
         for (oid, s) in steppers.items():
+            if not oid in ['9', '10', '11']:
+                continue
             pos = find_pos(s, clock)
-            print("oid %s pos %d" % (oid, pos))
+#            print("oid %s pos %d" % (oid, pos))
+            annotation += "%d " % (pos)
+            coord += "%f " % (pos * 1.5 / 400 / 16)
+        annotation += ')'
+        print("COORD: %s %f" % (coord, val))
     return annotation
 
 def read_dictionary(filename):
