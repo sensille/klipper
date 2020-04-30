@@ -59,7 +59,8 @@ def process(header, m):
     l = m.split(' ')
     cmd = l[0]
     if cmd not in ['fpga_reset_step_clock', 'fpga_set_next_step_dir',
-                   'fpga_dro_data', 'fpga_queue_step', 'clock']:
+                   'fpga_dro_data', 'fpga_queue_step', 'clock',
+                   'schedule_digital_out']:
         return None
     annotation = ""
     params = {}
@@ -201,9 +202,10 @@ def main():
                 msgs = mp.dump(bytearray(msg[:ml]))
                 phead = format_header(header)
                 for m in msgs[1:]:
-                    a = process(header, m)
-                    if a is None:
-                        continue
+                    a = ""
+                    #a = process(header, m)
+                    #if a is None:
+                    #    continue
                     sys.stdout.write(phead + m + ' ' + a + '\n')
                 msg = msg[ml:]
 

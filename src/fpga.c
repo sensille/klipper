@@ -100,6 +100,7 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define CMD_SHUTDOWN            19
 #define CMD_STEPPER_GET_NEXT    20
 #define CMD_CONFIG_DRO          21
+#define CMD_CONFIG_AS5311       22
 
 #define RSP_GET_VERSION         0
 #define RSP_GET_TIME            1
@@ -109,6 +110,7 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define RSP_SHUTDOWN            5
 #define RSP_STEPPER_GET_NEXT    6
 #define RSP_DRO_DATA            7
+#define RSP_AS5311_DATA         8
 
 fpga_cmd_t cmd_get_version = { CMD_GET_VERSION, 0 };
 fpga_cmd_t cmd_sync_time = { CMD_SYNC_TIME, 2 };
@@ -132,6 +134,7 @@ fpga_cmd_t cmd_schedule_digital_out = { CMD_SCHEDULE_DIGITAL_OUT, 3 };
 fpga_cmd_t cmd_update_digital_out = { CMD_UPDATE_DIGITAL_OUT, 2 };
 fpga_cmd_t cmd_shutdown = { CMD_SHUTDOWN, 0 };
 fpga_cmd_t cmd_config_dro = { CMD_CONFIG_DRO, 2 };
+fpga_cmd_t cmd_config_as5311 = { CMD_CONFIG_AS5311, 4 };
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -369,13 +372,14 @@ rsp_get_version(fpga_t *f, uint32_t *args)
     uint32_t a2 = args[2];
 
     sendf("fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
-        "endstop=%c uart=%c dro=%c move_cnt=%u", f->fid, f->version,
+        "endstop=%c uart=%c dro=%c asm=%c move_cnt=%u", f->fid, f->version,
         a1 >> 24,          // gpio
         (a1 >> 16) & 0xff, // pwm
         (a1 >> 8) & 0xff,  // stepper
         a1 & 0xff,         // endstop
         a2 >> 24,          // uart
-        (a2 >> 16) & 0xff, // dro
+        (a2 >> 16) & 0xf,  // dro
+        (a2 >> 20) & 0xf,  // as5311
         a2 & 0xffff);      // move_count
 
 #ifdef CLOCK_DEBUG
@@ -669,10 +673,6 @@ command_fpga_config_dro(uint32_t *args)
     fpga_t *f = fid_lookup(args[0]);
     fpga_dro_t *d = oid_alloc(args[1], command_fpga_config_dro, sizeof(*d));
 
-    /*
-     * dir and step have to be equal, min_stop_interval and invert_step are
-     * ignored. dedge can't be configured
-     */
     d->fpga = f;
     d->channel = args[2];
 
@@ -695,6 +695,44 @@ rsp_dro_data(fpga_t *f, uint32_t *args)
         shutdown("bad channel received");
 
     sendf("fpga_dro_data oid=%c clock=%hu data=%hu bits=%c", oid, args[1],
+        args[2], args[3]);
+}
+
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+} fpga_as5311_t;
+
+void
+command_fpga_config_as5311(uint32_t *args)
+{
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_as5311_t *a = oid_alloc(args[1], command_fpga_config_as5311,
+        sizeof(*a));
+
+    a->fpga = f;
+    a->channel = args[2];
+
+    fpga_send(a->fpga, &cmd_config_as5311, a->channel,
+        args[3], args[4], args[5]);
+}
+DECL_COMMAND(command_fpga_config_as5311,
+    "fpga_config_as5311 fid=%c oid=%c channel=%c div=%u sensor=%hu magnet=%hu");
+
+static void
+rsp_as5311_data(fpga_t *f, uint32_t *args)
+{
+    uint8_t oid;
+    fpga_as5311_t *a;
+
+    foreach_oid(oid, a, command_fpga_config_as5311)
+        if (a->channel == args[0])
+            break;
+
+    if (a == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_as5311_data oid=%c clock=%hu data=%u type=%c", oid, args[1],
         args[2], args[3]);
 }
 
@@ -853,6 +891,7 @@ struct response_handler_s {
     { 2, rsp_shutdown },
     { 4, rsp_stepper_get_next },
     { 4, rsp_dro_data },
+    { 4, rsp_as5311_data },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))
