@@ -163,7 +163,7 @@ class FPGA:
             "fpga_setup fid=%c usart_bus=%u rate=%u timesync_pin=%u "
             "serr_pin=%u sreset_pin=%u",
             "fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
-            "endstop=%c uart=%c dro=%c asm=%c move_cnt=%u", async=True)
+            "endstop=%c uart=%c sd=%c dro=%c asm=%c move_cnt=%u", async=True)
         rsp = cmd.send([self._fid, self._usart_bus, self._usart_rate,
                   self._timesync, self._serr, self._sreset])
         if rsp['fid'] != self._fid or rsp['version'] != 66:

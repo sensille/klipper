@@ -26,6 +26,7 @@
 #define F_BUFSZ 512
 #define F_WRAP(p) ((p) & (F_BUFSZ - 1))
 #define F_NEXT(p) F_WRAP((p) + 1)
+#define MAX_STRLEN 64
 
 static struct task_wake fpga_config_wake;
 static struct task_wake fpga_serial_wake;
@@ -62,7 +63,7 @@ typedef struct fpga_s {
 
 typedef struct {
     uint8_t     msg_id;
-    uint8_t     nparams;
+    int8_t      nparams;
 } fpga_cmd_t;
 
 fpga_t *fpgas[MAX_FPGA];
@@ -101,6 +102,7 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define CMD_STEPPER_GET_NEXT    20
 #define CMD_CONFIG_DRO          21
 #define CMD_CONFIG_AS5311       22
+#define CMD_SD_QUEUE            23
 
 #define RSP_GET_VERSION         0
 #define RSP_GET_TIME            1
@@ -111,6 +113,9 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define RSP_STEPPER_GET_NEXT    6
 #define RSP_DRO_DATA            7
 #define RSP_AS5311_DATA         8
+#define RSP_SD_CMDQ             9
+#define RSP_SD_DATQ            10
+
 
 fpga_cmd_t cmd_get_version = { CMD_GET_VERSION, 0 };
 fpga_cmd_t cmd_sync_time = { CMD_SYNC_TIME, 2 };
@@ -135,6 +140,7 @@ fpga_cmd_t cmd_update_digital_out = { CMD_UPDATE_DIGITAL_OUT, 2 };
 fpga_cmd_t cmd_shutdown = { CMD_SHUTDOWN, 0 };
 fpga_cmd_t cmd_config_dro = { CMD_CONFIG_DRO, 2 };
 fpga_cmd_t cmd_config_as5311 = { CMD_CONFIG_AS5311, 4 };
+fpga_cmd_t cmd_sd_queue = { CMD_SD_QUEUE, -2 };
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -372,12 +378,14 @@ rsp_get_version(fpga_t *f, uint32_t *args)
     uint32_t a2 = args[2];
 
     sendf("fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
-        "endstop=%c uart=%c dro=%c asm=%c move_cnt=%u", f->fid, f->version,
+        "endstop=%c uart=%c sd=%c dro=%c asm=%c move_cnt=%u",
+        f->fid, f->version,
         a1 >> 24,          // gpio
         (a1 >> 16) & 0xff, // pwm
         (a1 >> 8) & 0xff,  // stepper
         a1 & 0xff,         // endstop
-        a2 >> 24,          // uart
+        a2 >> 28,          // uart
+        (a2 >> 24) & 0xf,  // sd
         (a2 >> 16) & 0xf,  // dro
         (a2 >> 20) & 0xf,  // as5311
         a2 & 0xffff);      // move_count
@@ -859,6 +867,32 @@ command_fpga_update_digital_out(uint32_t *args)
 DECL_COMMAND(command_fpga_update_digital_out,
     "fpga_update_digital_out oid=%c value=%c");
 
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+} fpga_sd_t;
+void
+command_fpga_config_sd(uint32_t *args)
+{
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_sd_t *s = oid_alloc(args[1], command_fpga_config_sd, sizeof(*s));
+
+    s->fpga = f;
+    s->channel = args[2];
+}
+DECL_COMMAND(command_fpga_config_sd, "fpga_config_sd fid=%c oid=%c channel=%c");
+
+void
+command_fpga_sd_queue(uint32_t *args)
+{
+    fpga_sd_t *s = oid_lookup(args[0], command_fpga_config_sd);
+    uint8_t data_len = args[1];
+    uint8_t *data = (void*)(size_t)args[2];
+
+    fpga_send(s->fpga, &cmd_sd_queue, s->channel, data_len, data);
+}
+DECL_COMMAND(command_fpga_sd_queue, "fpga_sd_queue oid=%c data=%*s");
+
 static void
 rsp_shutdown(fpga_t *f, uint32_t *args)
 {
@@ -879,8 +913,40 @@ rsp_shutdown(fpga_t *f, uint32_t *args)
         shutdown("fpga unknown reason");
 }
 
+static void
+rsp_sd_cmdq(fpga_t *f, uint32_t *args)
+{
+    uint8_t oid;
+    fpga_sd_t *s;
+
+    foreach_oid(oid, s, command_fpga_config_sd)
+        if (s->channel == args[0])
+            break;
+
+    if (s == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_sd_cmdq oid=%c data=%*s", oid, args[1], args[2]);
+}
+
+static void
+rsp_sd_datq(fpga_t *f, uint32_t *args)
+{
+    uint8_t oid;
+    fpga_sd_t *s;
+
+    foreach_oid(oid, s, command_fpga_config_sd)
+        if (s->channel == args[0])
+            break;
+
+    if (s == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_sd_datq oid=%c data=%*s", oid, args[1], args[2]);
+}
+
 struct response_handler_s {
-    uint8_t nargs;
+    int8_t nargs;
     void (*func)(fpga_t *, uint32_t *);
 } response_handlers[] = {
     { 3, rsp_get_version },
@@ -892,10 +958,12 @@ struct response_handler_s {
     { 4, rsp_stepper_get_next },
     { 4, rsp_dro_data },
     { 4, rsp_as5311_data },
+    { -2, rsp_sd_cmdq },
+    { -2, rsp_sd_datq },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))
-#define RSP_MAX_ARGS 2
+#define RSP_MAX_ARGS 5
 
 static void
 fpga_rx_byte(void *ctx, uint_fast8_t b)
@@ -957,6 +1025,14 @@ fpga_send(fpga_t *f, fpga_cmd_t *fc, ...)
     uint16_t ptr;
     uint16_t crc = 0xffff;
     int i;
+    int n = fc->nparams;
+    int last_is_string = 0;
+    uint32_t p = 0;
+
+    if (n < 0) {
+        n = -n;
+        last_is_string = 1;
+    }
 
 again:;
     uint16_t tail = readw(&f->tx_tail);
@@ -966,15 +1042,22 @@ again:;
     else
         left = tail - head + F_BUFSZ;
 
-    if (fc->nparams * 5 + 6 > left) {
+    if (n * 5 + 6 + (last_is_string ? MAX_STRLEN : 0) > left) {
         /* not enough room, wait */
         goto again;
     }
 
     ptr = 2;
     f_encodeint(f, fc->msg_id, &ptr);
-    for (i = 0; i < fc->nparams; ++i)
-        f_encodeint(f, va_arg(args, uint32_t), &ptr);
+    for (i = 0; i < n; ++i) {
+        p = va_arg(args, uint32_t);
+        f_encodeint(f, p, &ptr);
+    }
+    if (last_is_string) {
+        uint8_t *s = va_arg(args, uint8_t *);
+        for (i = 0; i < p; ++i)
+            f_writebuf(f, ptr++, *s++);
+    }
     va_end(args);
 
     // add frame
@@ -1031,9 +1114,11 @@ fpga_serial_task(void)
         uint16_t rcvd;
         uint16_t l;
         uint16_t ptr;
-        uint8_t nargs;
+        int nargs;
+        int last_is_string = 0;
         uint32_t rspid;
         uint32_t args[RSP_MAX_ARGS];
+        uint8_t strbuf[MAX_STRLEN];
         uint16_t crc = 0xffff;
 
         if (f->rx_head >= f->rx_tail)
@@ -1081,8 +1166,19 @@ fpga_serial_task(void)
             shutdown("bad frame from fpga received (bad response id)");
 
         nargs = response_handlers[rspid].nargs;
-        for (i = 0;  i < nargs; ++i)
+        if (nargs < 0) {
+            nargs = -nargs;
+            last_is_string = 1;
+        }
+        for (i = 0; i < nargs; ++i)
             args[i] = f_parseint(f, &ptr);
+
+        if (last_is_string) {
+            int len = args[nargs - 1];
+            for (i = 0;  i < len; ++i)
+                strbuf[i] = f_readbuf(f, ptr++);
+            args[nargs] = (size_t)strbuf;
+        }
 
         ptr += MESSAGE_TRAILER_CRC;
         if (ptr != l)
