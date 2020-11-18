@@ -28,7 +28,8 @@ class FPGA_tmc_uart:
             % (self.oid, self.rx_pin, self.addr))
         self.tmcuart_read_cmd = self._mcu.lookup_query_command(
             "tmcuart_read oid=%c register=%c",
-            "tmcuart_data oid=%c status=%c data=%u", oid=self.oid, async=True)
+            "tmcuart_data oid=%c status=%c data=%u", oid=self.oid,
+            is_async=True)
         self.tmcuart_write_cmd = self._mcu.lookup_command(
             "tmcuart_write oid=%c register=%c data=%u")
     def register_instance(self, rx_pin_params, tx_pin_params,
@@ -151,7 +152,7 @@ class FPGA:
         cmd = mcu.lookup_query_command(
             "config_fpga fid=%c clk_pin=%u miso_pin=%u mosi_pin=%u cs_pin=%u "
             "program_pin=%u init_pin=%u done_pin=%u di_pin=%u",
-            "fpga_init_done fid=%c", async=True, timeout=10, retry_time=100)
+            "fpga_init_done fid=%c", is_async=True, timeout=10, retry_time=100)
         rsp = cmd.send([self._fid, self._flash_clk, self._flash_miso,
                   self._flash_mosi, self._flash_cs, self._program, self._init,
                   self._done, self._di])
@@ -163,7 +164,7 @@ class FPGA:
             "fpga_setup fid=%c usart_bus=%u rate=%u timesync_pin=%u "
             "serr_pin=%u sreset_pin=%u",
             "fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
-            "endstop=%c uart=%c sd=%c dro=%c asm=%c move_cnt=%u", async=True)
+            "endstop=%c uart=%c sd=%c dro=%c asm=%c move_cnt=%u", is_async=True)
         rsp = cmd.send([self._fid, self._usart_bus, self._usart_rate,
                   self._timesync, self._serr, self._sreset])
         if rsp['fid'] != self._fid or rsp['version'] != 66:
@@ -212,12 +213,12 @@ class FPGA:
         msgformat = self._remap_cmd(msgformat, False)
         return self._mcu.lookup_command(msgformat, cq=cq)
     def lookup_query_command(self, msgformat, respformat, oid=None,
-                             cq=None, async=False):
+                             cq=None, is_async=False):
         msgformat = self._remap_cmd(msgformat, False)
         respformat = self._remap_cmd(respformat, False)
         # all queries to fpga are async
         return self._mcu.lookup_query_command(msgformat, respformat, oid=oid,
-                                              cq=cq, async=True)
+                                              cq=cq, is_async=True)
     def try_lookup_command(self, msgformat):
         try:
             return self.lookup_command(msgformat)
