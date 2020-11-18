@@ -133,8 +133,7 @@ class Printer:
         if self.bglogger is not None:
             pconfig.log_config(config)
         # Create printer components
-        for m in [pins, mcu]:
-        for m in [pins, heater, mcu, fpga]:
+        for m in [pins, mcu, fpga]:
             m.add_printer_objects(config)
         for section_config in config.get_prefix_sections(''):
             self.load_object(config, section_config.get_name(), None)
