@@ -22,6 +22,8 @@ class none:
         pass
     def write_graphics(self, x, y, row, data):
         pass
+    def set_glyphs(self, glyphs):
+        pass
     def write_glyph(self, x, y, glyph_name):
         return 1
     def clear(self):
