@@ -119,9 +119,6 @@ class FPGA:
         # Config building
         printer.lookup_object('pins').register_chip(self._name, self)
         self._oid_count = 0
-        self._config_callbacks = []
-        self._init_cmds = []
-        self._config_cmds = []
         self._pin_map = config.get('pin_map', None)
         self._custom = config.get('custom', '')
         # Move command queuing
@@ -188,9 +185,9 @@ class FPGA:
         return self._mcu.create_oid()
     def register_config_callback(self, cb):
         self._mcu.register_config_callback(cb)
-    def add_config_cmd(self, cmd, is_init=False):
+    def add_config_cmd(self, cmd, is_init=False, on_restart=False):
         cmd = self._remap_cmd(cmd, True)
-        self._mcu.add_config_cmd(cmd, is_init)
+        self._mcu.add_config_cmd(cmd, is_init, on_restart)
     def get_query_slot(self, oid):
         return self._mcu.get_query_slot(oid)
     def register_stepqueue(self, stepqueue):
