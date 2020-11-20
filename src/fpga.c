@@ -120,8 +120,8 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 fpga_cmd_t cmd_get_version = { CMD_GET_VERSION, 0 };
 fpga_cmd_t cmd_sync_time = { CMD_SYNC_TIME, 2 };
 fpga_cmd_t cmd_get_uptime = { CMD_GET_TIME, 0 };
-fpga_cmd_t cmd_config_pwm = { CMD_CONFIG_PWM, 5 };
-fpga_cmd_t cmd_schedule_pwm = { CMD_SCHEDULE_PWM, 3 };
+fpga_cmd_t cmd_config_pwm = { CMD_CONFIG_PWM, 4 };
+fpga_cmd_t cmd_schedule_pwm = { CMD_SCHEDULE_PWM, 4 };
 fpga_cmd_t cmd_config_stepper = { CMD_CONFIG_STEPPER, 2 };
 fpga_cmd_t cmd_queue_step = { CMD_QUEUE_STEP, 4 };
 fpga_cmd_t cmd_set_next_step_dir = { CMD_SET_NEXT_STEP_DIR, 2 };
@@ -422,19 +422,12 @@ rsp_get_uptime(fpga_t *f, uint32_t *args)
 typedef struct {
     fpga_t  *fpga;
     uint8_t channel;
-    uint32_t cycle_ticks;
 } fpga_pwm_t;
 
 // We need to map the given values to the hardware behaviour:
 //
-// on_ticks >= cycle_ticks: all 1
-// on_ticks == cycle_ticks - 1: 1 tick 1, cycle_ticks - 1 ticks 0
-// on_ticks == cycle_ticks - 2: 2 ticks 1, cycle_ticks - 2 ticks 0
-// on_ticks == 2: 2 ticks 0
-// on_ticks == 1: 1 tick 0
-// on_ticks == 0: all 0
-// default 0: -> always 0
-// default 1: -> always 1
+// on_ticks == 0: always on
+// off_ticks == 0: always off
 void
 command_fpga_config_pwm(uint32_t *args)
 {
@@ -443,30 +436,32 @@ command_fpga_config_pwm(uint32_t *args)
 
     p->fpga = f;
     p->channel = args[2];
-    p->cycle_ticks = args[3];
 
-    /* given value is either 0 or 1. map to pwm range */
-    fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4] ? args[3] : 0,
-              !!args[5], args[6]);
+    fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4], args[6]);
 }
 DECL_COMMAND(command_fpga_config_pwm, "fpga_config_soft_pwm_out fid=%c oid=%c "
-    "channel=%c cycle_ticks=%u value=%c default_value=%c max_duration=%u");
+    "channel=%c value=%c default_value=%c max_duration=%u");
 
 void
 command_fpga_schedule_pwm(uint32_t *args)
 {
     fpga_pwm_t *p = oid_lookup(args[0], command_fpga_config_pwm);
-    uint32_t on_ticks;
+    uint32_t on_ticks = args[2];
+    uint32_t off_ticks = args[3];
 
-    if (args[2] > 0 && args[2] < p->cycle_ticks)
-        on_ticks = p->cycle_ticks - args[2];
-    else
-        on_ticks = args[2];
+    if (on_ticks == 0) {
+        on_ticks = 1;
+        off_ticks = 0;
+    } else if (off_ticks == 0) {
+        on_ticks = 0;
+        off_ticks = 1;
+    }
 
-    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], on_ticks);
+    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, on_ticks, off_ticks);
 }
 DECL_COMMAND(command_fpga_schedule_pwm,
-    "fpga_schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u");
+    "fpga_schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u off_ticks=%u");
+
 
 typedef struct {
     fpga_t  *fpga;
