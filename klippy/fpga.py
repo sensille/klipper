@@ -63,6 +63,7 @@ class FPGA:
         #        pin remapping: (index, (classes))
         'config_digital_out': (True, ((2, 'channel', ('pwm', 'gpio')),)),
         'schedule_digital_out': (False, ()),
+        'update_digital_out': (False, ()),
         'config_soft_pwm_out': (True, ((2, 'channel', ('pwm',)),)),
         'schedule_soft_pwm_out': (False, ()),
         'config_tmcuart': (True, ((2, 'channel', ('uart')),)),

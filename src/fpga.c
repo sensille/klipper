@@ -457,7 +457,8 @@ command_fpga_schedule_pwm(uint32_t *args)
         off_ticks = 1;
     }
 
-    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, on_ticks, off_ticks);
+    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], on_ticks,
+        off_ticks);
 }
 DECL_COMMAND(command_fpga_schedule_pwm,
     "fpga_schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u off_ticks=%u");
