@@ -20,7 +20,7 @@ class none:
         pass
     def write_text(self, x, y, data):
         pass
-    def write_graphics(self, x, y, row, data):
+    def write_graphics(self, x, y, data):
         pass
     def set_glyphs(self, glyphs):
         pass

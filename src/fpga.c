@@ -437,7 +437,7 @@ command_fpga_config_pwm(uint32_t *args)
     p->fpga = f;
     p->channel = args[2];
 
-    fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4], args[6]);
+    fpga_send(f, &cmd_config_pwm, args[2], args[3], args[4], args[5]);
 }
 DECL_COMMAND(command_fpga_config_pwm, "fpga_config_soft_pwm_out fid=%c oid=%c "
     "channel=%c value=%c default_value=%c max_duration=%u");
