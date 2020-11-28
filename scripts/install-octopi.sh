@@ -100,4 +100,4 @@ install_packages
 create_virtualenv
 install_script
 install_config
-start_software
+#start_software

@@ -446,19 +446,13 @@ void
 command_fpga_schedule_pwm(uint32_t *args)
 {
     fpga_pwm_t *p = oid_lookup(args[0], command_fpga_config_pwm);
-    uint32_t on_ticks = args[2];
-    uint32_t off_ticks = args[3];
 
-    if (on_ticks == 0) {
-        on_ticks = 1;
-        off_ticks = 0;
-    } else if (off_ticks == 0) {
-        on_ticks = 0;
-        off_ticks = 1;
+    if (args[2] == 0 && args[3] == 0) {
+        shutdown("invalid pwm parameters");
     }
 
-    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], on_ticks,
-        off_ticks);
+    fpga_send(p->fpga, &cmd_schedule_pwm, p->channel, args[1], args[2],
+        args[3]);
 }
 DECL_COMMAND(command_fpga_schedule_pwm,
     "fpga_schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u off_ticks=%u");
