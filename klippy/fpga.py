@@ -88,6 +88,8 @@ class FPGA:
         'dro_data': (False, ()),
         'config_as5311': (True, ((2, 'channel', ('asm',)),)),
         'as5311_data': (False, ()),
+        'config_ether': (True, ((2, 'channel', ('eth',)),)),
+        'ether_set_state': (False, ()),
     }
     def __init__(self, config):
         self._printer = printer = config.get_printer()
@@ -162,7 +164,8 @@ class FPGA:
             "fpga_setup fid=%c usart_bus=%u rate=%u timesync_pin=%u "
             "serr_pin=%u sreset_pin=%u",
             "fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
-            "endstop=%c uart=%c sd=%c dro=%c asm=%c move_cnt=%u", is_async=True)
+            "endstop=%c uart=%c sd=%c eth=%c dro=%c asm=%c move_cnt=%u",
+            is_async=True)
         rsp = cmd.send([self._fid, self._usart_bus, self._usart_rate,
                   self._timesync, self._serr, self._sreset])
         if rsp['fid'] != self._fid or rsp['version'] != 66:
@@ -171,7 +174,7 @@ class FPGA:
         del rsp['fid']
         self._config = {k: rsp[k] for k in rsp if not k.startswith('#')}
         self._classes = {k: rsp[k] for k in ('gpio', 'pwm', 'endstop', 'uart',
-                                             'dro', 'asm')}
+                                             'dro', 'asm', 'eth')}
         self._classes['step'] = rsp['stepper']
         self._classes['dir'] = rsp['stepper']
         logging.info(self._log_info())

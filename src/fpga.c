@@ -103,6 +103,11 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define CMD_CONFIG_DRO          21
 #define CMD_CONFIG_AS5311       22
 #define CMD_SD_QUEUE            23
+#define CMD_CONFIG_ETHER        24
+#define CMD_ETHER_MD_READ       25
+#define CMD_ETHER_MD_WRITE      26
+#define CMD_ETHER_SET_STATE     27
+#define CMD_CONFIG_SIGNAL       28
 
 #define RSP_GET_VERSION         0
 #define RSP_GET_TIME            1
@@ -115,6 +120,7 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define RSP_AS5311_DATA         8
 #define RSP_SD_CMDQ             9
 #define RSP_SD_DATQ            10
+#define RSP_ETHER_MD_READ      11
 
 
 fpga_cmd_t cmd_get_version = { CMD_GET_VERSION, 0 };
@@ -138,9 +144,14 @@ fpga_cmd_t cmd_config_digital_out = { CMD_CONFIG_DIGITAL_OUT, 4 };
 fpga_cmd_t cmd_schedule_digital_out = { CMD_SCHEDULE_DIGITAL_OUT, 3 };
 fpga_cmd_t cmd_update_digital_out = { CMD_UPDATE_DIGITAL_OUT, 2 };
 fpga_cmd_t cmd_shutdown = { CMD_SHUTDOWN, 0 };
-fpga_cmd_t cmd_config_dro = { CMD_CONFIG_DRO, 2 };
-fpga_cmd_t cmd_config_as5311 = { CMD_CONFIG_AS5311, 4 };
+fpga_cmd_t cmd_config_dro = { CMD_CONFIG_DRO, 3 };
+fpga_cmd_t cmd_config_as5311 = { CMD_CONFIG_AS5311, 5 };
 fpga_cmd_t cmd_sd_queue = { CMD_SD_QUEUE, -2 };
+fpga_cmd_t cmd_config_ether = { CMD_CONFIG_ETHER, 4 };
+fpga_cmd_t cmd_ether_md_read = { CMD_ETHER_MD_READ, 3 };
+fpga_cmd_t cmd_ether_md_write = { CMD_ETHER_MD_WRITE, 4 };
+fpga_cmd_t cmd_ether_set_state = { CMD_ETHER_SET_STATE, 2 };
+fpga_cmd_t cmd_config_signal = { CMD_CONFIG_SIGNAL, 2 };
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -378,14 +389,15 @@ rsp_get_version(fpga_t *f, uint32_t *args)
     uint32_t a2 = args[2];
 
     sendf("fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
-        "endstop=%c uart=%c sd=%c dro=%c asm=%c move_cnt=%u",
+        "endstop=%c uart=%c sd=%c eth=%c dro=%c asm=%c move_cnt=%u",
         f->fid, f->version,
         a1 >> 24,          // gpio
         (a1 >> 16) & 0xff, // pwm
         (a1 >> 8) & 0xff,  // stepper
         a1 & 0xff,         // endstop
         a2 >> 28,          // uart
-        (a2 >> 24) & 0xf,  // sd
+        (a2 >> 26) & 0x3,  // sd
+        (a2 >> 24) & 0x3,  // eth
         (a2 >> 16) & 0xf,  // dro
         (a2 >> 20) & 0xf,  // as5311
         a2 & 0xffff);      // move_count
@@ -674,10 +686,10 @@ command_fpga_config_dro(uint32_t *args)
     d->fpga = f;
     d->channel = args[2];
 
-    fpga_send(d->fpga, &cmd_config_dro, d->channel, args[3]);
+    fpga_send(d->fpga, &cmd_config_dro, d->channel, args[3], args[4]);
 }
 DECL_COMMAND(command_fpga_config_dro,
-    "fpga_config_dro fid=%c oid=%c channel=%c timeout=%u");
+    "fpga_config_dro fid=%c oid=%c channel=%c timeout=%u daq=%c");
 
 static void
 rsp_dro_data(fpga_t *f, uint32_t *args)
@@ -712,10 +724,11 @@ command_fpga_config_as5311(uint32_t *args)
     a->channel = args[2];
 
     fpga_send(a->fpga, &cmd_config_as5311, a->channel,
-        args[3], args[4], args[5]);
+        args[3], args[4], args[5], args[6]);
 }
 DECL_COMMAND(command_fpga_config_as5311,
-    "fpga_config_as5311 fid=%c oid=%c channel=%c div=%u sensor=%hu magnet=%hu");
+    "fpga_config_as5311 fid=%c oid=%c channel=%c div=%u sensor=%hu magnet=%hu "
+    "daq=%c");
 
 static void
 rsp_as5311_data(fpga_t *f, uint32_t *args)
@@ -883,6 +896,85 @@ command_fpga_sd_queue(uint32_t *args)
 }
 DECL_COMMAND(command_fpga_sd_queue, "fpga_sd_queue oid=%c data=%*s");
 
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+    uint8_t phy;
+} fpga_ether_t;
+
+void
+command_fpga_config_ether(uint32_t *args)
+{
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_ether_t *e = oid_alloc(args[1], command_fpga_config_ether, sizeof(*e));
+
+    e->fpga = f;
+    e->channel = args[2];
+    e->phy = args[3];
+
+    fpga_send(e->fpga, &cmd_config_ether, args[2], args[4], args[5], args[6]);
+}
+DECL_COMMAND(command_fpga_config_ether,
+    "fpga_config_ether fid=%c oid=%c channel=%c phy=%c "
+    "macs1=%hu macs2=%hu macs3=%hu");
+
+void
+command_fpga_ether_md_read(uint32_t *args)
+{
+    fpga_ether_t *e = oid_lookup(args[0], command_fpga_config_ether);
+
+    fpga_send(e->fpga, &cmd_ether_md_read, e->channel, e->phy, args[1]);
+}
+DECL_COMMAND(command_fpga_ether_md_read,
+    "fpga_ether_md_read oid=%c register=%c");
+
+static void
+rsp_ether_md_read(fpga_t *f, uint32_t *args)
+{
+    uint8_t oid;
+    fpga_ether_t *e;
+
+    foreach_oid(oid, e, command_fpga_config_ether)
+        if (e->channel == args[0])
+            break;
+
+    if (e == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_ether_md_data oid=%c data=%u", oid, args[1]);
+}
+
+void
+command_fpga_ether_md_write(uint32_t *args)
+{
+    fpga_ether_t *e = oid_lookup(args[0], command_fpga_config_ether);
+
+    fpga_send(e->fpga, &cmd_ether_md_write, e->channel, e->phy, args[1],
+        args[2]);
+}
+DECL_COMMAND(command_fpga_ether_md_write,
+    "fpga_ether_md_write oid=%c register=%c data=%u");
+
+void
+command_fpga_ether_set_state(uint32_t *args)
+{
+    fpga_ether_t *e = oid_lookup(args[0], command_fpga_config_ether);
+
+    fpga_send(e->fpga, &cmd_ether_set_state, e->channel, args[1]);
+}
+DECL_COMMAND(command_fpga_ether_set_state,
+    "fpga_ether_set_state oid=%c state=%c");
+
+void
+command_fpga_config_signal(uint32_t *args)
+{
+    fpga_t *f = fid_lookup(args[0]);
+
+    fpga_send(f, &cmd_config_signal, args[1], args[2]);
+}
+DECL_COMMAND(command_fpga_config_signal,
+    "fpga_config_signal fid=%c enable=%c mask=%hu");
+
 static void
 rsp_shutdown(fpga_t *f, uint32_t *args)
 {
@@ -950,6 +1042,7 @@ struct response_handler_s {
     { 4, rsp_as5311_data },
     { -2, rsp_sd_cmdq },
     { -2, rsp_sd_datq },
+    { 2, rsp_ether_md_read },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))
