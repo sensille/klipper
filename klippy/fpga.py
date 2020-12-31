@@ -90,6 +90,7 @@ class FPGA:
         'as5311_data': (False, ()),
         'config_ether': (True, ((2, 'channel', ('eth',)),)),
         'ether_set_state': (False, ()),
+        'config_signal': (True, ()),
     }
     def __init__(self, config):
         self._printer = printer = config.get_printer()
