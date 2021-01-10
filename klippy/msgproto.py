@@ -145,13 +145,13 @@ class MessageFormat:
         self.name_to_type = dict(self.param_names)
     def encode(self, params):
         out = []
-        out.append(self.msgid)
+        PT_uint32().encode(out, self.msgid)
         for i, t in enumerate(self.param_types):
             t.encode(out, params[i])
         return out
     def encode_by_name(self, **params):
         out = []
-        out.append(self.msgid)
+        PT_uint32().encode(out, self.msgid)
         for name, t in self.param_names:
             t.encode(out, params[name])
         return out

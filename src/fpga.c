@@ -108,6 +108,9 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define CMD_ETHER_MD_WRITE      26
 #define CMD_ETHER_SET_STATE     27
 #define CMD_CONFIG_SIGNAL       28
+#define CMD_CONFIG_BISS         29
+#define CMD_BISS_FRAME          30
+#define CMD_CONFIG_ABZ          31
 
 #define RSP_GET_VERSION         0
 #define RSP_GET_TIME            1
@@ -121,6 +124,7 @@ static void fpga_send(fpga_t *f, fpga_cmd_t *fc, ...);
 #define RSP_SD_CMDQ             9
 #define RSP_SD_DATQ            10
 #define RSP_ETHER_MD_READ      11
+#define RSP_BISS_FRAME         12
 
 
 fpga_cmd_t cmd_get_version = { CMD_GET_VERSION, 0 };
@@ -152,6 +156,9 @@ fpga_cmd_t cmd_ether_md_read = { CMD_ETHER_MD_READ, 3 };
 fpga_cmd_t cmd_ether_md_write = { CMD_ETHER_MD_WRITE, 4 };
 fpga_cmd_t cmd_ether_set_state = { CMD_ETHER_SET_STATE, 2 };
 fpga_cmd_t cmd_config_signal = { CMD_CONFIG_SIGNAL, 2 };
+fpga_cmd_t cmd_config_biss = { CMD_CONFIG_BISS, 3 };
+fpga_cmd_t cmd_biss_frame = { CMD_BISS_FRAME, 3 };
+fpga_cmd_t cmd_config_abz = { CMD_CONFIG_ABZ, 2 };
 
 static inline uint32_t
 nsecs_to_ticks(uint32_t ns)
@@ -387,20 +394,23 @@ rsp_get_version(fpga_t *f, uint32_t *args)
 
     uint32_t a1 = args[1];
     uint32_t a2 = args[2];
+    uint32_t a3 = args[3];
+    uint32_t a4 = args[4];
 
     sendf("fpga_config fid=%c version=%u gpio=%c pwm=%c stepper=%c "
-        "endstop=%c uart=%c sd=%c eth=%c dro=%c asm=%c move_cnt=%u",
+        "endstop=%c uart=%c sd=%c eth=%c asm=%c dro=%c biss=%c move_cnt=%u",
         f->fid, f->version,
         a1 >> 24,          // gpio
         (a1 >> 16) & 0xff, // pwm
         (a1 >> 8) & 0xff,  // stepper
         a1 & 0xff,         // endstop
-        a2 >> 28,          // uart
-        (a2 >> 26) & 0x3,  // sd
-        (a2 >> 24) & 0x3,  // eth
-        (a2 >> 16) & 0xf,  // dro
-        (a2 >> 20) & 0xf,  // as5311
-        a2 & 0xffff);      // move_count
+        a2 >> 24,          // uart
+        (a2 >> 16) & 0xff, // sd
+        (a2 >> 8) & 0xff,  // eth
+        a2 & 0xff,         // as5311
+        a3 >> 24,          // dro
+        (a3 >> 16) & 0xff, // biss
+        a4 & 0xffff);      // move_count
 
 #ifdef CLOCK_DEBUG
     f->timer.func = fpga_timer;
@@ -975,6 +985,60 @@ command_fpga_config_signal(uint32_t *args)
 DECL_COMMAND(command_fpga_config_signal,
     "fpga_config_signal fid=%c enable=%c mask=%hu");
 
+void
+command_fpga_config_abz(uint32_t *args)
+{
+    fpga_t *f = fid_lookup(args[0]);
+
+    fpga_send(f, &cmd_config_abz, args[1], args[2]);
+}
+DECL_COMMAND(command_fpga_config_abz,
+    "fpga_config_abz fid=%c enable=%c mask=%hu");
+
+typedef struct {
+    fpga_t  *fpga;
+    uint8_t channel;
+} fpga_biss_t;
+
+void
+command_fpga_config_biss(uint32_t *args)
+{
+    fpga_t *f = fid_lookup(args[0]);
+    fpga_biss_t *b = oid_alloc(args[1], command_fpga_config_biss, sizeof(*b));
+
+    b->fpga = f;
+    b->channel = args[2];
+
+    fpga_send(b->fpga, &cmd_config_biss, args[2], args[3], args[4]);
+}
+DECL_COMMAND(command_fpga_config_biss,
+    "fpga_config_biss fid=%c oid=%c channel=%c freq=%u timeout=%u");
+
+void
+command_fpga_biss_frame(uint32_t *args)
+{
+    fpga_biss_t *b = oid_lookup(args[0], command_fpga_config_biss);
+
+    fpga_send(b->fpga, &cmd_biss_frame, b->channel, args[1], args[2]);
+}
+DECL_COMMAND(command_fpga_biss_frame, "fpga_biss_frame oid=%c cdm=%c bits=%c");
+
+static void
+rsp_biss_frame(fpga_t *f, uint32_t *args)
+{
+    uint8_t oid;
+    fpga_biss_t *b = NULL;
+
+    foreach_oid(oid, b, command_fpga_config_biss)
+        if (b->channel == args[0])
+            break;
+
+    if (b == NULL)
+        shutdown("bad channel received");
+
+    sendf("fpga_biss_data oid=%c data=%*s", oid, args[1], args[2]);
+}
+
 static void
 rsp_shutdown(fpga_t *f, uint32_t *args)
 {
@@ -1031,7 +1095,7 @@ struct response_handler_s {
     int8_t nargs;
     void (*func)(fpga_t *, uint32_t *);
 } response_handlers[] = {
-    { 3, rsp_get_version },
+    { 5, rsp_get_version },
     { 2, rsp_get_uptime },
     { 2, rsp_stepper_get_pos },
     { 3, rsp_endstop_state },
@@ -1043,6 +1107,7 @@ struct response_handler_s {
     { -2, rsp_sd_cmdq },
     { -2, rsp_sd_datq },
     { 2, rsp_ether_md_read },
+    { -2, rsp_biss_frame },
 };
 #define RSP_MAX_ID \
     (sizeof(response_handlers) / sizeof(struct response_handler_s))
